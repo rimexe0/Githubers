@@ -1,0 +1,39 @@
+services:
+  app:
+    build:
+      context: ./app
+    environment:
+      DATABASE_URL: postgres://githubers:githubers@postgres:5432/githubers
+      APP_URL: http://localhost:3000
+      POLL_INTERVAL_MINUTES: 60
+      SUMMARY_CRON: "0 8 * * *"
+      SCHEDULER_ENABLED: "true"
+      CODEX_HOME: /codex-home
+      OPENCODE_CONFIG_HOME: /opencode-home
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ${CODEX_HOME:-./codex-home}:/codex-home:ro
+      - ${OPENCODE_CONFIG_HOME:-./opencode-home}:/opencode-home:ro
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: githubers
+      POSTGRES_PASSWORD: githubers
+      POSTGRES_DB: githubers
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U githubers -d githubers"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres-data:
