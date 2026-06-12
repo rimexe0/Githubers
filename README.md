@@ -1,6 +1,6 @@
 # Githubers
 
-Self-hosted GitHub Projects v2 change watcher for LAN/Tailscale deployments.
+AI Slop Self-hosted GitHub Projects v2 change watcher for LAN/Tailscale deployments.
 
 ## Stack
 
