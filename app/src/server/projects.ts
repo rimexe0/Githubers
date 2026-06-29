@@ -27,14 +27,16 @@ export async function listProjects(): Promise<ProjectRow[]> {
 
   return projects.rows.map((project) => ({
     ...project,
-    repositories: repos.rows
-      .filter((repo) => repo.project_id === project.id)
-      .map((repo) => ({
+    repositories: repos.rows.flatMap((repo) =>
+      repo.project_id === project.id
+        ? [{
         id: repo.id,
         ownerLogin: repo.owner_login,
         repoName: repo.repo_name,
         enabled: repo.enabled,
-      })),
+      }]
+        : [],
+    ),
   }));
 }
 
@@ -61,6 +63,31 @@ export async function createProject(input: ProjectInput) {
   }
 
   return projectId;
+}
+
+export async function updateProject(id: string, input: ProjectInput) {
+  const project = projectSchema.parse(input);
+  const result = await query<{ id: string }>(
+    `UPDATE github_projects
+     SET owner_type = $2, owner_login = $3, project_number = $4, title = NULLIF($5, ''), enabled = $6, updated_at = now()
+     WHERE id = $1
+     RETURNING id`,
+    [id, project.ownerType, project.ownerLogin, project.projectNumber, project.title, project.enabled],
+  );
+  if (result.rowCount === 0) throw new Error("Project not found");
+
+  await query("DELETE FROM github_repositories WHERE project_id = $1", [id]);
+  await Promise.all(
+    project.repositories.map((repo) =>
+      query(
+        `INSERT INTO github_repositories (project_id, owner_login, repo_name, enabled)
+         VALUES ($1, $2, $3, $4)`,
+        [id, repo.ownerLogin, repo.repoName, repo.enabled],
+      ),
+    ),
+  );
+
+  return id;
 }
 
 export async function deleteProject(id: string) {

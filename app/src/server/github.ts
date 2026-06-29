@@ -1,6 +1,6 @@
 import type { ProjectRow } from "@/server/projects";
 
-type ProjectV2ItemNode = {
+export type ProjectV2ItemNode = {
   id: string;
   type: string;
   fieldValues: {
@@ -20,7 +20,19 @@ type ProjectV2ItemNode = {
       login: string;
     };
     updatedAt?: string;
+    comments?: {
+      nodes: CommentNode[];
+    };
   } | null;
+};
+
+export type CommentNode = {
+  id: string;
+  author?: { login: string } | null;
+  body: string;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type ProjectState = {
@@ -44,8 +56,16 @@ type GraphQlResponse = {
   errors?: { message: string }[];
 };
 
+function formatGraphQlErrors(errors: { message: string }[]) {
+  const message = errors.map((error) => error.message).join("; ");
+  if (message.includes("Resource not accessible by personal access token")) {
+    return `${message}. GitHub Projects v2 requires a classic PAT with repo + read:project; fine-grained PATs cannot read Projects v2.`;
+  }
+  return message;
+}
+
 const projectQuery = `
-  query ProjectState($owner: String!, $number: Int!, $after: String, $isOrg: Boolean!) {
+  query ProjectState($owner: String!, $number: Int!, $after: String, $isOrg: Boolean!, $commentPollLimit: Int!) {
     organization(login: $owner) @include(if: $isOrg) {
       projectV2(number: $number) {
         title
@@ -66,8 +86,8 @@ const projectQuery = `
             }
             content {
               __typename
-              ... on Issue { id title state url number updatedAt author { login } repository { nameWithOwner } }
-              ... on PullRequest { id title state url number updatedAt author { login } repository { nameWithOwner } }
+              ... on Issue { id title state url number updatedAt author { login } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
+              ... on PullRequest { id title state url number updatedAt author { login } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
               ... on DraftIssue { id title }
             }
           }
@@ -94,8 +114,8 @@ const projectQuery = `
             }
             content {
               __typename
-              ... on Issue { id title state url number updatedAt author { login } repository { nameWithOwner } }
-              ... on PullRequest { id title state url number updatedAt author { login } repository { nameWithOwner } }
+              ... on Issue { id title state url number updatedAt author { login } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
+              ... on PullRequest { id title state url number updatedAt author { login } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
               ... on DraftIssue { id title }
             }
           }
@@ -105,7 +125,201 @@ const projectQuery = `
   }
 `;
 
-export async function fetchProjectState(project: ProjectRow, token: string): Promise<ProjectState> {
+export type RepoIssueNode = {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  updatedAt: string;
+  author?: { login: string } | null;
+  labels?: { nodes: { name: string; color: string }[] } | null;
+};
+
+export type RepoPullRequestNode = {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  updatedAt: string;
+  author?: { login: string } | null;
+};
+
+type OpenIssuesResponse = {
+  data?: Record<string, { issues?: { nodes: RepoIssueNode[] } } | null> | null;
+  errors?: { message: string }[];
+};
+
+type PullRequestsResponse = {
+  data?: Record<
+    string,
+    {
+      openPullRequests?: { nodes: RepoPullRequestNode[] };
+      closedPullRequests?: { nodes: RepoPullRequestNode[] };
+    } | null
+  > | null;
+  errors?: { message: string }[];
+};
+
+export async function fetchOpenIssues(
+  repos: { ownerLogin: string; repoName: string }[],
+  token: string,
+  limit = 30,
+): Promise<{ repository: string; issues: RepoIssueNode[] }[]> {
+  if (!repos.length) return [];
+  if (!token) throw new Error("GitHub token is not configured");
+
+  const variableDefs = ["$limit: Int!", ...repos.map((_, index) => `$owner${index}: String!, $name${index}: String!`)].join(", ");
+  const selections = repos
+    .map(
+      (_, index) => `
+        repo${index}: repository(owner: $owner${index}, name: $name${index}) {
+          issues(states: [OPEN], first: $limit, orderBy: { field: UPDATED_AT, direction: DESC }) {
+            nodes { id number title url updatedAt author { login } labels(first: 5) { nodes { name color } } }
+          }
+        }`,
+    )
+    .join("\n");
+
+  const variables: Record<string, string | number> = { limit };
+  repos.forEach((repo, index) => {
+    variables[`owner${index}`] = repo.ownerLogin;
+    variables[`name${index}`] = repo.repoName;
+  });
+
+  const response = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "user-agent": "github-project-change-watcher",
+    },
+    body: JSON.stringify({ query: `query OpenIssues(${variableDefs}) { ${selections} }`, variables }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub GraphQL failed: ${response.status} ${response.statusText}`);
+  }
+
+  const payload = (await response.json()) as OpenIssuesResponse;
+  // Missing repos surface as per-alias nulls alongside errors; only fail when nothing came back.
+  if (payload.errors?.length && !payload.data) {
+    throw new Error(formatGraphQlErrors(payload.errors));
+  }
+
+  return repos.map((repo, index) => ({
+    repository: `${repo.ownerLogin}/${repo.repoName}`,
+    issues: payload.data?.[`repo${index}`]?.issues?.nodes ?? [],
+  }));
+}
+
+export async function fetchPullRequests(
+  repos: { ownerLogin: string; repoName: string }[],
+  token: string,
+  limit = 30,
+): Promise<{ repository: string; open: RepoPullRequestNode[]; closed: RepoPullRequestNode[] }[]> {
+  if (!repos.length) return [];
+  if (!token) throw new Error("GitHub token is not configured");
+
+  const variableDefs = ["$limit: Int!", ...repos.map((_, index) => `$owner${index}: String!, $name${index}: String!`)].join(", ");
+  const selections = repos
+    .map(
+      (_, index) => `
+        repo${index}: repository(owner: $owner${index}, name: $name${index}) {
+          openPullRequests: pullRequests(states: [OPEN], first: $limit, orderBy: { field: UPDATED_AT, direction: DESC }) {
+            nodes { id number title url state updatedAt author { login } }
+          }
+          closedPullRequests: pullRequests(states: [CLOSED, MERGED], first: $limit, orderBy: { field: UPDATED_AT, direction: DESC }) {
+            nodes { id number title url state updatedAt author { login } }
+          }
+        }`,
+    )
+    .join("\n");
+
+  const variables: Record<string, string | number> = { limit };
+  repos.forEach((repo, index) => {
+    variables[`owner${index}`] = repo.ownerLogin;
+    variables[`name${index}`] = repo.repoName;
+  });
+
+  const response = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "user-agent": "github-project-change-watcher",
+    },
+    body: JSON.stringify({ query: `query PullRequests(${variableDefs}) { ${selections} }`, variables }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub GraphQL failed: ${response.status} ${response.statusText}`);
+  }
+
+  const payload = (await response.json()) as PullRequestsResponse;
+  if (payload.errors?.length && !payload.data) {
+    throw new Error(formatGraphQlErrors(payload.errors));
+  }
+
+  return repos.map((repo, index) => ({
+    repository: `${repo.ownerLogin}/${repo.repoName}`,
+    open: payload.data?.[`repo${index}`]?.openPullRequests?.nodes ?? [],
+    closed: payload.data?.[`repo${index}`]?.closedPullRequests?.nodes ?? [],
+  }));
+}
+
+type UpdatedAtResponse = {
+  data?: Record<string, { projectV2?: { updatedAt: string } | null } | null> | null;
+  errors?: { message: string }[];
+};
+
+// Freshness probe: ~1 rate-limit point per project, vs hundreds for a full sync.
+export async function fetchProjectUpdatedAts(projects: ProjectRow[], token: string): Promise<Record<string, string>> {
+  if (!projects.length) return {};
+  if (!token) throw new Error("GitHub token is not configured");
+
+  const variableDefs = projects.map((_, index) => `$owner${index}: String!, $number${index}: Int!`).join(", ");
+  const selections = projects
+    .map(
+      (project, index) =>
+        `p${index}: ${project.owner_type === "org" ? "organization" : "user"}(login: $owner${index}) { projectV2(number: $number${index}) { updatedAt } }`,
+    )
+    .join("\n");
+
+  const variables: Record<string, string | number> = {};
+  projects.forEach((project, index) => {
+    variables[`owner${index}`] = project.owner_login;
+    variables[`number${index}`] = project.project_number;
+  });
+
+  const response = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "user-agent": "github-project-change-watcher",
+    },
+    body: JSON.stringify({ query: `query ProjectUpdatedAts(${variableDefs}) { ${selections} }`, variables }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub GraphQL failed: ${response.status} ${response.statusText}`);
+  }
+
+  const payload = (await response.json()) as UpdatedAtResponse;
+  if (payload.errors?.length && !payload.data) {
+    throw new Error(formatGraphQlErrors(payload.errors));
+  }
+
+  const updatedAts: Record<string, string> = {};
+  projects.forEach((project, index) => {
+    const updatedAt = payload.data?.[`p${index}`]?.projectV2?.updatedAt;
+    if (updatedAt) updatedAts[project.id] = updatedAt;
+  });
+  return updatedAts;
+}
+
+export async function fetchProjectState(project: ProjectRow, token: string, commentPollLimit = 50): Promise<ProjectState> {
   if (!token) throw new Error("GitHub token is not configured");
 
   const items: ProjectV2ItemNode[] = [];
@@ -127,6 +341,7 @@ export async function fetchProjectState(project: ProjectRow, token: string): Pro
           number: project.project_number,
           after,
           isOrg: project.owner_type === "org",
+          commentPollLimit,
         },
       }),
     });
@@ -137,7 +352,7 @@ export async function fetchProjectState(project: ProjectRow, token: string): Pro
 
     const payload = (await response.json()) as GraphQlResponse;
     if (payload.errors?.length) {
-      throw new Error(payload.errors.map((error: { message: string }) => error.message).join("; "));
+      throw new Error(formatGraphQlErrors(payload.errors));
     }
 
     const node: ProjectV2ResponseNode | null | undefined =

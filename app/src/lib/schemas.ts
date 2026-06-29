@@ -24,6 +24,7 @@ export const settingsSchema = z.object({
   summaryProviderOrder: z.string().default("lmstudio,codex,opencode,none"),
   summaryStyle: z.string().default("Concise situation summary with what changed, blockers, risks, and next actions."),
   summaryCron: z.string().default("0 8 * * *"),
+  commentPollLimit: z.coerce.number().int().min(1).max(100).default(50),
   lmStudioBaseUrl: z.string().default("http://host.docker.internal:1234/v1"),
   lmStudioModel: z.string().default("local-model"),
   lmStudioTemperature: z.coerce.number().min(0).max(2).default(0.2),
@@ -38,6 +39,7 @@ export const settingsSchema = z.object({
   emailTo: z.string().optional().default(""),
   telegramBotToken: z.string().optional().default(""),
   telegramChatId: z.string().optional().default(""),
+  webhookSecret: z.string().optional().default(""),
 });
 
 export type AppSettings = z.infer<typeof settingsSchema>;
