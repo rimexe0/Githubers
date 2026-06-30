@@ -19,6 +19,9 @@ export type ProjectV2ItemNode = {
     author?: {
       login: string;
     };
+    assignees?: {
+      nodes: { login: string }[];
+    };
     updatedAt?: string;
     comments?: {
       nodes: CommentNode[];
@@ -86,8 +89,8 @@ const projectQuery = `
             }
             content {
               __typename
-              ... on Issue { id title state url number updatedAt author { login } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
-              ... on PullRequest { id title state url number updatedAt author { login } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
+              ... on Issue { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
+              ... on PullRequest { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
               ... on DraftIssue { id title }
             }
           }
@@ -114,8 +117,8 @@ const projectQuery = `
             }
             content {
               __typename
-              ... on Issue { id title state url number updatedAt author { login } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
-              ... on PullRequest { id title state url number updatedAt author { login } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
+              ... on Issue { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
+              ... on PullRequest { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
               ... on DraftIssue { id title }
             }
           }
@@ -132,6 +135,7 @@ export type RepoIssueNode = {
   url: string;
   updatedAt: string;
   author?: { login: string } | null;
+  assignees?: { nodes: { login: string }[] } | null;
   labels?: { nodes: { name: string; color: string }[] } | null;
 };
 
@@ -143,6 +147,9 @@ export type RepoPullRequestNode = {
   state: "OPEN" | "CLOSED" | "MERGED";
   updatedAt: string;
   author?: { login: string } | null;
+  assignees?: { nodes: { login: string }[] } | null;
+  reviewRequests?: { nodes: { requestedReviewer?: { login?: string } | null }[] } | null;
+  closingIssuesReferences?: { nodes: { number: number; repository: { nameWithOwner: string } }[] } | null;
 };
 
 type OpenIssuesResponse = {
@@ -175,7 +182,7 @@ export async function fetchOpenIssues(
       (_, index) => `
         repo${index}: repository(owner: $owner${index}, name: $name${index}) {
           issues(states: [OPEN], first: $limit, orderBy: { field: UPDATED_AT, direction: DESC }) {
-            nodes { id number title url updatedAt author { login } labels(first: 5) { nodes { name color } } }
+            nodes { id number title url updatedAt author { login } assignees(first: 5) { nodes { login } } labels(first: 5) { nodes { name color } } }
           }
         }`,
     )
@@ -227,10 +234,10 @@ export async function fetchPullRequests(
       (_, index) => `
         repo${index}: repository(owner: $owner${index}, name: $name${index}) {
           openPullRequests: pullRequests(states: [OPEN], first: $limit, orderBy: { field: UPDATED_AT, direction: DESC }) {
-            nodes { id number title url state updatedAt author { login } }
+            nodes { id number title url state updatedAt author { login } assignees(first: 5) { nodes { login } } reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } } } } closingIssuesReferences(first: 5) { nodes { number repository { nameWithOwner } } } }
           }
           closedPullRequests: pullRequests(states: [CLOSED, MERGED], first: $limit, orderBy: { field: UPDATED_AT, direction: DESC }) {
-            nodes { id number title url state updatedAt author { login } }
+            nodes { id number title url state updatedAt author { login } assignees(first: 5) { nodes { login } } reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } } } } closingIssuesReferences(first: 5) { nodes { number repository { nameWithOwner } } } }
           }
         }`,
     )

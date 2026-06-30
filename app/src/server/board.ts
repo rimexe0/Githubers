@@ -11,6 +11,7 @@ type SnapshotContent = {
   number?: number;
   repository?: { nameWithOwner: string };
   author?: { login: string };
+  assignees?: { nodes: { login: string }[] };
   updatedAt?: string;
 } | null;
 
@@ -31,6 +32,16 @@ export type BoardItem = {
   repository: string | null;
   number: number | null;
   status: string;
+  author: string | null;
+  assignees: string[];
+};
+
+export type BoardLinkedPr = {
+  number: number;
+  repository: string;
+  title: string;
+  url: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
 };
 
 export type BoardOpenIssue = {
@@ -40,6 +51,8 @@ export type BoardOpenIssue = {
   title: string;
   url: string;
   author: string | null;
+  assignees: string[];
+  linkedPullRequests: BoardLinkedPr[];
   updatedAt: string;
   labels: { name: string; color: string }[];
   onBoard: boolean;
@@ -53,6 +66,8 @@ export type BoardPullRequest = {
   url: string;
   state: "OPEN" | "CLOSED" | "MERGED";
   author: string | null;
+  assignees: string[];
+  reviewers: string[];
   updatedAt: string;
   onBoard: boolean;
 };
@@ -112,6 +127,8 @@ export async function getProjectBoard(projectId: string) {
       repository: content?.repository?.nameWithOwner ?? null,
       number: content?.number ?? null,
       status: extractStatus(snapshot.fieldValues),
+      author: content?.author?.login ?? null,
+      assignees: content?.assignees?.nodes?.map((assignee) => assignee.login) ?? [],
     };
   });
 
@@ -138,6 +155,8 @@ export async function getProjectBoard(projectId: string) {
           title: issue.title,
           url: issue.url,
           author: issue.author?.login ?? null,
+          assignees: issue.assignees?.nodes?.map((assignee) => assignee.login) ?? [],
+          linkedPullRequests: [] as BoardLinkedPr[],
           updatedAt: issue.updatedAt,
           labels: issue.labels?.nodes ?? [],
           onBoard: onBoardIds.has(issue.id),
@@ -148,19 +167,31 @@ export async function getProjectBoard(projectId: string) {
     issuesError = error instanceof Error ? error.message : "Failed to fetch open issues";
   }
 
+  // issueKey ("owner/repo#number") -> PRs that declare they close it, built while mapping PRs.
+  const prsByIssue = new Map<string, BoardLinkedPr[]>();
   try {
     const results = await fetchPullRequests(repoList, settings.githubToken);
-    const mapPullRequest = (repository: string, pr: { id: string; number: number; title: string; url: string; state: "OPEN" | "CLOSED" | "MERGED"; author?: { login: string } | null; updatedAt: string }) => ({
-      id: pr.id,
-      repository,
-      number: pr.number,
-      title: pr.title,
-      url: pr.url,
-      state: pr.state,
-      author: pr.author?.login ?? null,
-      updatedAt: pr.updatedAt,
-      onBoard: onBoardIds.has(pr.id),
-    });
+    const mapPullRequest = (repository: string, pr: { id: string; number: number; title: string; url: string; state: "OPEN" | "CLOSED" | "MERGED"; author?: { login: string } | null; assignees?: { nodes: { login: string }[] } | null; reviewRequests?: { nodes: { requestedReviewer?: { login?: string } | null }[] } | null; closingIssuesReferences?: { nodes: { number: number; repository: { nameWithOwner: string } }[] } | null; updatedAt: string }) => {
+      for (const ref of pr.closingIssuesReferences?.nodes ?? []) {
+        const key = `${ref.repository.nameWithOwner}#${ref.number}`;
+        const list = prsByIssue.get(key) ?? [];
+        list.push({ number: pr.number, repository, title: pr.title, url: pr.url, state: pr.state });
+        prsByIssue.set(key, list);
+      }
+      return {
+        id: pr.id,
+        repository,
+        number: pr.number,
+        title: pr.title,
+        url: pr.url,
+        state: pr.state,
+        author: pr.author?.login ?? null,
+        assignees: pr.assignees?.nodes?.map((assignee) => assignee.login) ?? [],
+        reviewers: pr.reviewRequests?.nodes?.flatMap((node) => (node.requestedReviewer?.login ? [node.requestedReviewer.login] : [])) ?? [],
+        updatedAt: pr.updatedAt,
+        onBoard: onBoardIds.has(pr.id),
+      };
+    };
     pullRequests = {
       open: results
         .flatMap((result) => result.open.map((pr) => mapPullRequest(result.repository, pr)))
@@ -172,6 +203,12 @@ export async function getProjectBoard(projectId: string) {
   } catch (error) {
     prsError = error instanceof Error ? error.message : "Failed to fetch pull requests";
   }
+
+  // Attach each open issue's linked PRs (newest first) now that PR references are known.
+  openIssues = openIssues.map((issue) => ({
+    ...issue,
+    linkedPullRequests: (prsByIssue.get(`${issue.repository}#${issue.number}`) ?? []).sort((a, b) => b.number - a.number),
+  }));
 
   return {
     id: project.id,
