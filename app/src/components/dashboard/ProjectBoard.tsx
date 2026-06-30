@@ -1,8 +1,7 @@
 "use client";
 
-import { ChevronLeft, ListFilter, UserRound } from "lucide-react";
-import { useEffect, useMemo, useReducer, useState } from "react";
-import { Group, Panel, Separator } from "react-resizable-panels";
+import { CheckCheck, ChevronDown, ChevronRight, Eye, GripVertical, ListFilter, Mail, Search, UserRound } from "lucide-react";
+import { Fragment, useEffect, useMemo, useReducer, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,10 +15,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Activity } from "./Activity";
 import { IssueRow } from "./IssueRow";
 import { PullRequestRow } from "./PullRequestRow";
 import type { BoardData, BoardItem, Project } from "./types";
@@ -76,15 +77,115 @@ function projectBoardReducer(state: ProjectBoardState, action: ProjectBoardActio
   return { ...state, selectedIssueRepo: action.value };
 }
 
+type Searchable = {
+  title?: string | null;
+  repository?: string | null;
+  number?: number | null;
+  author?: string | null;
+  assignees?: string[];
+  reviewers?: string[];
+  labels?: { name: string }[];
+  state?: string | null;
+  type?: string | null;
+};
+
+// Universal board search: every token must match. A token that's a (#-prefixed)
+// number matches the item number exactly OR as text — so "#42", "42", and
+// "repo#42" all find the item, which the GitHub board search refuses to do.
+function matchesSearch(query: string, item: Searchable): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    item.title,
+    item.repository,
+    item.author,
+    item.state,
+    item.type,
+    item.number != null ? `#${item.number}` : "",
+    ...(item.assignees ?? []),
+    ...(item.reviewers ?? []),
+    ...(item.labels?.map((label) => label.name) ?? []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return q.split(/\s+/).every((token) => {
+    const bare = token.replace(/^#/, "");
+    if (/^\d+$/.test(bare) && item.number != null && String(item.number) === bare) return true;
+    return haystack.includes(token);
+  });
+}
+
+// --- Tiling layout -----------------------------------------------------------
+// The board is lanes (horizontal) of panes (vertical stacks). Panes are status
+// columns plus the fixed Issues / PRs / Activity panes, all rearrangeable.
+
+const FIXED_PANES = ["issues", "prs", "activity"];
+type LaneLayout = string[][];
+
+const layoutKey = (projectId: string) => `board-layout-${projectId}`;
+
+function defaultLayout(columnNames: string[]): LaneLayout {
+  return [...columnNames.map((name) => [`col:${name}`]), ["issues", "prs"], ["activity"]];
+}
+
+function loadStoredLayout(projectId: string): LaneLayout | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(layoutKey(projectId));
+    return raw ? (JSON.parse(raw) as LaneLayout) : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadSizeMap(key: string): Record<string, number> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function persist(key: string, value: unknown) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* ignore quota/availability errors */
+  }
+}
+
+// Keep stored positions for panes that still exist; give newly-appeared panes
+// (a new status column, say) their own lane; drop panes that vanished.
+function reconcileLayout(prev: LaneLayout | null, columnNames: string[]): LaneLayout {
+  const paneIds = [...columnNames.map((name) => `col:${name}`), ...FIXED_PANES];
+  if (!prev) return defaultLayout(columnNames);
+  const present = new Set(paneIds);
+  const lanes = prev.map((lane) => lane.filter((id) => present.has(id))).filter((lane) => lane.length);
+  const placed = new Set(lanes.flat());
+  for (const id of paneIds) {
+    if (!placed.has(id)) lanes.push([id]);
+  }
+  return lanes.length ? lanes : defaultLayout(columnNames);
+}
+
 export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { project: Project; refreshKey: number; onEdit: () => void; onDelete: () => Promise<void> }) {
   const [boardState, dispatchBoard] = useReducer(projectBoardReducer, initialProjectBoardState);
-  const { board, error, loading, fetchId, showClosedPrs, selectedIssueRepo } = boardState;
+  const { board, error, fetchId, showClosedPrs, selectedIssueRepo } = boardState;
   const prSwitchId = `pr-state-switch-${project.id}`;
   const issueRepo = selectedIssueRepo || board?.repositories[0] || "";
 
-  // Per-project collapsed columns, persisted; "Done" collapses by default the first time.
+  const [search, setSearch] = useState("");
+  const [filterUser, setFilterUser] = useState<string>(ALL_USERS);
+  const [rels, setRels] = useState<Record<Relationship, boolean>>({ assigned: true, created: true, review: true });
+  const filtering = filterUser !== ALL_USERS;
+
+  // Per-pane collapse + drag/tiling layout, both persisted per project.
   const collapsedKey = `board-collapsed-${project.id}`;
-  const [collapsedCols, setCollapsedCols] = useState<Set<string>>(() => {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     if (typeof window === "undefined") return new Set();
     try {
       const stored = window.localStorage.getItem(collapsedKey);
@@ -93,6 +194,42 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
       return new Set();
     }
   });
+  const [layout, setLayout] = useState<LaneLayout | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+
+  // Resizing: explicit pane heights (vertical) and lane flex-basis (horizontal).
+  // Lanes grow to fill the width, so basis is a starting size; the grow factor
+  // distributes free space — a collapsed lane drops out and the rest expand.
+  const heightsKey = `board-paneheights-${project.id}`;
+  const basisKey = `board-lanebasis-${project.id}`;
+  const [paneHeights, setPaneHeights] = useState<Record<string, number>>(() => loadSizeMap(heightsKey));
+  const [laneBasis, setLaneBasis] = useState<Record<string, number>>(() => loadSizeMap(basisKey));
+  const defaultBasis = (lane: string[]) => (lane.includes("activity") ? 360 : 280);
+  const setPaneSize = (paneId: string, height: number) =>
+    setPaneHeights((prev) => {
+      const next = { ...prev, [paneId]: Math.max(80, height) };
+      persist(heightsKey, next);
+      return next;
+    });
+  const setLaneBasisFor = (sig: string, basis: number) =>
+    setLaneBasis((prev) => {
+      const next = { ...prev, [sig]: Math.max(180, basis) };
+      persist(basisKey, next);
+      return next;
+    });
+
+  // Activity pane controls live in its header (like the PRs "closed" toggle),
+  // so the board owns their state and feeds them to the Activity component.
+  const [actKind, setActKind] = useState("");
+  const [actUnreadOnly, setActUnreadOnly] = useState(false);
+  const [actDone, setActDone] = useState(false);
+  const [actUnread, setActUnread] = useState(0);
+  const [actReload, setActReload] = useState(0);
+  const markAllRead = async () => {
+    await api("/api/activity/read", { method: "POST", body: JSON.stringify({ all: true }) });
+    setActReload((n) => n + 1);
+  };
+
   const openNewIssue = () => {
     if (!issueRepo) return;
     window.open(`https://github.com/${issueRepo}/issues/new`, "_blank", "noopener,noreferrer");
@@ -104,11 +241,9 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
       .then((data) => {
         if (cancelled) return;
         dispatchBoard({ type: "loaded", board: data });
-        // With no saved preference, collapse "Done"-style columns by default. Idempotent
-        // across reloads, and skipped once the user has toggled anything (key then exists).
         if (!window.localStorage.getItem(collapsedKey)) {
-          const done = data.columns.filter((column) => /done|complete|closed/i.test(column.name)).map((column) => column.name);
-          if (done.length) setCollapsedCols(new Set(done));
+          const done = data.columns.filter((column) => /done|complete|closed/i.test(column.name)).map((column) => `col:${column.name}`);
+          if (done.length) setCollapsed(new Set(done));
         }
       })
       .catch((loadError: unknown) => {
@@ -120,28 +255,39 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
     };
   }, [project.id, fetchId, refreshKey, collapsedKey]);
 
-  const toggleColumn = (name: string) => {
-    setCollapsedCols((previous) => {
+  const columnNames = useMemo(() => (board?.columns ?? []).map((column) => column.name), [board]);
+
+  // Derived, not effect-set: the effective layout is the user's saved/edited
+  // arrangement reconciled against the panes that currently exist. Computed
+  // only once the board has loaded so we never reconcile against an empty
+  // column set and clobber the saved arrangement.
+  const effectiveLayout = useMemo<LaneLayout | null>(
+    () => (board ? reconcileLayout(layout ?? loadStoredLayout(project.id), columnNames) : null),
+    [board, layout, columnNames, project.id],
+  );
+
+  useEffect(() => {
+    if (!effectiveLayout) return;
+    try {
+      window.localStorage.setItem(layoutKey(project.id), JSON.stringify(effectiveLayout));
+    } catch {
+      /* ignore quota/availability errors */
+    }
+  }, [effectiveLayout, project.id]);
+
+  const toggleCollapse = (paneId: string) => {
+    setCollapsed((previous) => {
       const next = new Set(previous);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
+      if (next.has(paneId)) next.delete(paneId);
+      else next.add(paneId);
       try {
         window.localStorage.setItem(collapsedKey, JSON.stringify([...next]));
       } catch {
-        /* ignore quota/availability errors */
+        /* ignore */
       }
       return next;
     });
   };
-
-  const load = () => {
-    dispatchBoard({ type: "load" });
-  };
-
-  // Filter by a user across selectable relationships (assignee / author / reviewer).
-  const [filterUser, setFilterUser] = useState<string>(ALL_USERS);
-  const [rels, setRels] = useState<Record<Relationship, boolean>>({ assigned: true, created: true, review: true });
-  const filtering = filterUser !== ALL_USERS;
 
   const allUsers = useMemo(() => {
     const set = new Set<string>();
@@ -161,9 +307,153 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
     );
   };
 
-  const visibleColumns = (board?.columns ?? []).map((column) => ({ name: column.name, items: column.items.filter(matchesFilter) }));
-  const visibleIssues = (board?.openIssues ?? []).filter(matchesFilter);
-  const visiblePrs = (showClosedPrs ? board?.pullRequests.closed : board?.pullRequests.open)?.filter(matchesFilter) ?? [];
+  const visible = (item: Searchable & { author: string | null; assignees: string[]; reviewers?: string[] }) => matchesFilter(item) && matchesSearch(search, item);
+  const visibleColumns = (board?.columns ?? []).map((column) => ({ name: column.name, items: column.items.filter(visible) }));
+  const visibleIssues = (board?.openIssues ?? []).filter(visible);
+  const visiblePrs = (showClosedPrs ? board?.pullRequests.closed : board?.pullRequests.open)?.filter(visible) ?? [];
+
+  // --- pane drag/move ---
+  const locate = (lanes: LaneLayout, id: string): [number, number] => {
+    for (let i = 0; i < lanes.length; i += 1) {
+      const j = lanes[i].indexOf(id);
+      if (j >= 0) return [i, j];
+    }
+    return [-1, -1];
+  };
+
+  const movePane = (id: string, toLane: number, toIndex: number) => {
+    if (!effectiveLayout) return;
+    const lanes = effectiveLayout.map((lane) => [...lane]);
+    const [fromLane, fromIdx] = locate(lanes, id);
+    if (fromLane < 0) return;
+    lanes[fromLane].splice(fromIdx, 1);
+    let idx = toIndex;
+    if (fromLane === toLane && fromIdx < toIndex) idx -= 1;
+    lanes[toLane].splice(idx, 0, id);
+    setLayout(lanes.filter((lane) => lane.length));
+    setDragId(null);
+  };
+
+  const movePaneToNewLane = (id: string, laneIndex: number) => {
+    if (!effectiveLayout) return;
+    const lanes = effectiveLayout.map((lane) => [...lane]);
+    const [fromLane, fromIdx] = locate(lanes, id);
+    if (fromLane < 0) return;
+    lanes[fromLane].splice(fromIdx, 1);
+    lanes.splice(laneIndex, 0, [id]);
+    setLayout(lanes.filter((lane) => lane.length));
+    setDragId(null);
+  };
+
+  const paneMeta = (paneId: string): { title: string; accent: string } => {
+    if (paneId.startsWith("col:")) {
+      const name = paneId.slice(4);
+      return { title: name, accent: columnAccent(name) };
+    }
+    if (paneId === "issues") return { title: "Open issues", accent: "var(--ctp-peach)" };
+    if (paneId === "prs") return { title: "Pull requests", accent: "var(--ctp-mauve)" };
+    return { title: "Activity", accent: "var(--ctp-blue)" };
+  };
+
+  const paneCount = (paneId: string): number | null => {
+    if (paneId.startsWith("col:")) return visibleColumns.find((column) => column.name === paneId.slice(4))?.items.length ?? 0;
+    if (paneId === "issues") return visibleIssues.length;
+    if (paneId === "prs") return visiblePrs.length;
+    return null;
+  };
+
+  const renderBody = (paneId: string) => {
+    if (paneId.startsWith("col:")) {
+      const column = visibleColumns.find((entry) => entry.name === paneId.slice(4));
+      return (
+        <div className="flex flex-col gap-1 p-1">
+          {column?.items.map((item) => <BoardCard key={item.id} item={item} />)}
+          {!column?.items.length && <div className="px-1 py-2 text-[0.65rem] text-muted-foreground">Empty</div>}
+        </div>
+      );
+    }
+    if (paneId === "issues") {
+      return (
+        <div className="flex flex-col gap-px p-1">
+          {board?.issuesError && <div className="rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">{board.issuesError}</div>}
+          {board && !board.issuesError && !visibleIssues.length && (
+            <div className="px-1 py-2 text-[0.65rem] text-muted-foreground">{board.repositories.length ? "No open issues." : "Link repos to list their open issues."}</div>
+          )}
+          {visibleIssues.map((issue) => <IssueRow key={issue.id} issue={issue} />)}
+        </div>
+      );
+    }
+    if (paneId === "prs") {
+      return (
+        <div className="flex flex-col gap-px p-1">
+          {board?.prsError && <div className="rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">{board.prsError}</div>}
+          {board && !board.prsError && !visiblePrs.length && (
+            <div className="px-1 py-2 text-[0.65rem] text-muted-foreground">No {showClosedPrs ? "closed" : "open"} pull requests.</div>
+          )}
+          {visiblePrs.map((pr) => <PullRequestRow key={pr.id} pullRequest={pr} />)}
+        </div>
+      );
+    }
+    return (
+      <div className="h-full p-1">
+        <Activity
+          projectId={project.id}
+          active
+          refreshKey={refreshKey}
+          actor={filtering ? filterUser : ""}
+          search={search}
+          kind={actKind}
+          unreadOnly={actUnreadOnly}
+          includeDone={actDone}
+          reloadKey={actReload}
+          onStats={setActUnread}
+        />
+      </div>
+    );
+  };
+
+  const paneHeaderExtra = (paneId: string) => {
+    if (paneId === "prs") {
+      return (
+        <label className="flex items-center gap-1 text-[0.6rem] text-muted-foreground" htmlFor={prSwitchId}>
+          closed
+          <Switch id={prSwitchId} checked={showClosedPrs} onCheckedChange={(value) => dispatchBoard({ type: "showClosedPrs", value })} />
+        </label>
+      );
+    }
+    if (paneId === "activity") {
+      const ctl = (active: boolean) =>
+        `flex items-center gap-0.5 rounded px-1 py-0.5 ${active ? "bg-[var(--ctp-blue)] text-[var(--ctp-base)]" : "text-muted-foreground hover:bg-accent"}`;
+      return (
+        <div className="flex items-center gap-0.5 text-[0.6rem]">
+          <select
+            value={actKind}
+            onChange={(event) => setActKind(event.target.value)}
+            className="h-5 rounded border border-input bg-card px-0.5 text-[0.6rem] text-foreground"
+            title="Filter by type"
+          >
+            <option value="">all</option>
+            <option value="pr">PRs</option>
+            <option value="issue">issues</option>
+            <option value="review">reviews</option>
+            <option value="comment">comments</option>
+            <option value="project">board</option>
+          </select>
+          <button type="button" title="Unread only" onClick={() => setActUnreadOnly((value) => !value)} className={ctl(actUnreadOnly)}>
+            <Mail className="size-3" />
+            {actUnread > 0 && <span className="tabular-nums">{actUnread}</span>}
+          </button>
+          <button type="button" title="Show done" onClick={() => setActDone((value) => !value)} className={ctl(actDone)}>
+            <Eye className="size-3" />
+          </button>
+          <button type="button" title="Mark all read" disabled={!actUnread} onClick={markAllRead} className={`${ctl(false)} disabled:opacity-40`}>
+            <CheckCheck className="size-3" />
+          </button>
+        </div>
+      );
+    }
+    return null;
+  };
 
   return (
     <div className="flex h-full flex-col gap-2">
@@ -173,7 +463,16 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
           {project.owner_type}/{project.owner_login} #{project.project_number}
           {board?.lastSyncedAt ? ` · synced ${relativeTime(board.lastSyncedAt)} ago` : ""}
         </span>
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="relative ml-auto flex items-center">
+          <Search className="pointer-events-none absolute left-2 size-3 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search #42, title, author, label, state…"
+            className="h-7 w-64 pl-7 text-xs"
+          />
+        </div>
+        <div className="flex items-center gap-1.5">
           {board && allUsers.length > 0 && (
             <Popover>
               <PopoverTrigger asChild>
@@ -204,7 +503,7 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
                         <Label htmlFor={`rel-${key}-${project.id}`} className="text-xs font-normal">{label}</Label>
                       </div>
                     ))}
-                    <p className="text-[0.65rem] text-muted-foreground">&ldquo;Review requested&rdquo; applies to pull requests only.</p>
+                    <p className="text-[0.65rem] text-muted-foreground">Filter applies to board panes and the activity pane (by actor).</p>
                   </div>
                 </div>
               </PopoverContent>
@@ -223,7 +522,6 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
             </Select>
           )}
           <Button type="button" variant="secondary" size="xs" onClick={openNewIssue} disabled={!issueRepo}>New issue</Button>
-          <Button type="button" variant="secondary" size="xs" onClick={load} disabled={loading}>{loading ? "Loading..." : "Reload"}</Button>
           <Button type="button" variant="secondary" size="xs" onClick={onEdit}>Edit</Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
@@ -245,124 +543,230 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
 
       {error && <div className="shrink-0 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">{error}</div>}
 
-      <div className="flex min-h-0 flex-1 gap-2">
-        <div className="flex h-full min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
-          {board && !board.columns.length && (
-            <div className="text-xs text-muted-foreground">No board items synced yet. Run a sync to pull the project.</div>
-          )}
-          {visibleColumns.map((column) => (
-            <ColumnPanel
-              key={column.name}
-              column={column}
-              collapsed={collapsedCols.has(column.name)}
-              onToggle={() => toggleColumn(column.name)}
-            />
-          ))}
-        </div>
-
-        <div className="h-full w-80 shrink-0">
-          <Group orientation="vertical" className="h-full min-h-0 gap-1">
-            <Panel defaultSize={50} minSize={50} className="min-h-0">
-              <div className="flex h-full min-h-0 flex-col">
-                <div className="flex shrink-0 items-baseline gap-2 px-2 py-1">
-                  <h3 className="shrink-0 whitespace-nowrap text-xs font-semibold text-[var(--ctp-peach)]">Open issues</h3>
-                  <span className="truncate text-[0.65rem] text-[var(--ctp-overlay0)]">
-                    {board ? (board.repositories.length ? board.repositories.join(", ") : "no repos linked") : ""}
-                  </span>
-                </div>
-                {board?.issuesError && <div className="shrink-0 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">{board.issuesError}</div>}
-                {board && !board.issuesError && !visibleIssues.length && (
-                  <div className="px-2 text-xs text-muted-foreground">{board.repositories.length ? "No open issues." : "Link repos to this project to list their open issues."}</div>
-                )}
-                <div className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
-                  {visibleIssues.map((issue) => <IssueRow key={issue.id} issue={issue} />)}
-                </div>
+      <div className="flex min-h-0 flex-1 gap-1 overflow-x-auto pb-1" onDragEnd={() => setDragId(null)}>
+        {(effectiveLayout ?? []).map((lane, laneIndex, lanesArr) => {
+          const sig = lane.join(",");
+          // A lane whose panes are all collapsed shrinks to a narrow strip of
+          // vertical bars; expanded lanes grow to fill the freed width.
+          const laneAllCollapsed = lane.every((paneId) => collapsed.has(paneId));
+          const laneStyle: React.CSSProperties = laneAllCollapsed
+            ? { flex: "0 0 2.25rem" }
+            : { flex: `1 1 ${laneBasis[sig] ?? defaultBasis(lane)}px`, minWidth: 180 };
+          const makePane = (paneId: string, isBar: boolean) => (
+            <Pane
+              meta={paneMeta(paneId)}
+              count={paneCount(paneId)}
+              collapsed={collapsed.has(paneId)}
+              bar={isBar}
+              dragging={dragId === paneId}
+              scroll={paneId !== "activity"}
+              onToggle={() => toggleCollapse(paneId)}
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", paneId);
+                setDragId(paneId);
+              }}
+              headerExtra={paneHeaderExtra(paneId)}
+            >
+              {renderBody(paneId)}
+            </Pane>
+          );
+          return (
+            <Fragment key={sig || laneIndex}>
+              {dragId && <LaneGap onDrop={() => movePaneToNewLane(dragId, laneIndex)} />}
+              <div className="flex h-full min-w-0 flex-col gap-1" style={laneStyle}>
+                {lane.map((paneId, paneIndex) => {
+                  if (laneAllCollapsed) {
+                    return (
+                      <Fragment key={paneId}>
+                        {dragId && dragId !== paneId && <PaneDrop onDrop={() => movePane(dragId, laneIndex, paneIndex)} />}
+                        <div className="flex min-h-0 flex-1 flex-col">{makePane(paneId, true)}</div>
+                      </Fragment>
+                    );
+                  }
+                  const isCollapsed = collapsed.has(paneId);
+                  const isLast = paneIndex === lane.length - 1;
+                  const explicitH = paneHeights[paneId];
+                  const wrapperStyle = isCollapsed ? undefined : !isLast && explicitH ? { height: explicitH, flexShrink: 0 } : { flex: "1 1 0", minHeight: 0 };
+                  return (
+                    <Fragment key={paneId}>
+                      {dragId && dragId !== paneId && <PaneDrop onDrop={() => movePane(dragId, laneIndex, paneIndex)} />}
+                      <div className={isCollapsed ? "shrink-0" : "flex min-h-0 flex-col"} style={wrapperStyle}>{makePane(paneId, false)}</div>
+                      {!dragId && !isCollapsed && !isLast && (
+                        <ResizeHandle axis="y" onResize={(value) => setPaneSize(paneId, value)} />
+                      )}
+                    </Fragment>
+                  );
+                })}
+                {dragId && <PaneDrop trailing onDrop={() => movePane(dragId, laneIndex, lane.length)} />}
               </div>
-            </Panel>
-
-            <ResizeHandle orientation="vertical" />
-
-            <Panel defaultSize={50} minSize={18} className="min-h-0">
-              <div className="flex h-full min-h-0 flex-col">
-                <div className="flex shrink-0 items-center gap-2 px-2 py-1">
-                  <h3 className="text-xs font-semibold text-[var(--ctp-mauve)]">Pull requests</h3>
-                  <span className="text-[0.65rem] text-[var(--ctp-overlay0)]">{showClosedPrs ? "closed/merged" : "open"}</span>
-                  <label className="ml-auto flex items-center gap-1.5 text-[0.65rem] text-muted-foreground" htmlFor={prSwitchId}>
-                    Closed
-                    <Switch id={prSwitchId} checked={showClosedPrs} onCheckedChange={(value) => dispatchBoard({ type: "showClosedPrs", value })} />
-                  </label>
-                </div>
-                {board?.prsError && <div className="shrink-0 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">{board.prsError}</div>}
-                {board && !board.prsError && visiblePrs.length === 0 && (
-                  <div className="px-2 text-xs text-muted-foreground">No {showClosedPrs ? "closed" : "open"} pull requests.</div>
-                )}
-                <div className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
-                  {visiblePrs.map((pr) => <PullRequestRow key={pr.id} pullRequest={pr} />)}
-                </div>
-              </div>
-            </Panel>
-          </Group>
-        </div>
+              {!dragId && !laneAllCollapsed && laneIndex < lanesArr.length - 1 && (
+                <ResizeHandle axis="x" getStart={() => laneBasis[sig] ?? defaultBasis(lane)} onResize={(value) => setLaneBasisFor(sig, value)} />
+              )}
+            </Fragment>
+          );
+        })}
+        {dragId && effectiveLayout && <LaneGap onDrop={() => movePaneToNewLane(dragId, effectiveLayout.length)} />}
       </div>
     </div>
   );
 }
 
-function ColumnPanel({ column, collapsed, onToggle }: { column: { name: string; items: BoardItem[] }; collapsed: boolean; onToggle: () => void }) {
-  // Faint status tint on the column background only; cards keep their own background.
-  const tint = `color-mix(in oklab, ${columnAccent(column.name)} 7%, var(--ctp-mantle))`;
+function Pane({
+  meta,
+  count,
+  collapsed,
+  bar,
+  dragging,
+  scroll,
+  onToggle,
+  onDragStart,
+  headerExtra,
+  children,
+}: {
+  meta: { title: string; accent: string };
+  count: number | null;
+  collapsed: boolean;
+  bar: boolean;
+  dragging: boolean;
+  scroll: boolean;
+  onToggle: () => void;
+  onDragStart: (event: React.DragEvent) => void;
+  headerExtra: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const tint = `color-mix(in oklab, ${meta.accent} 8%, var(--ctp-mantle))`;
 
-  if (collapsed) {
+  // Vertical bar: a collapsed pane that's alone in its lane reclaims the
+  // horizontal space, with its title rotated 90° (like the old columns).
+  if (bar) {
     return (
-      <button
-        type="button"
-        onClick={onToggle}
-        title={`Expand ${column.name}`}
-        className="board-column flex h-full w-9 shrink-0 cursor-pointer flex-col items-center gap-2 py-2"
-        style={{ background: tint }}
-      >
-        <span className="shrink-0 text-[0.65rem] tabular-nums text-muted-foreground">{column.items.length}</span>
-        <span className="text-xs font-semibold text-[var(--ctp-text)] [writing-mode:vertical-rl]">{column.name}</span>
-      </button>
+      <div className={`flex min-h-0 flex-1 flex-col items-center gap-1.5 overflow-hidden rounded-md border border-border py-1.5 ${dragging ? "opacity-40" : ""}`} style={{ background: tint }}>
+        <span draggable onDragStart={onDragStart} className="cursor-grab text-muted-foreground active:cursor-grabbing" title="Drag to move pane">
+          <GripVertical className="size-3.5" />
+        </span>
+        <button type="button" onClick={onToggle} className="flex min-h-0 flex-1 flex-col items-center gap-1.5" title="Expand">
+          {count != null && <span className="shrink-0 text-[0.6rem] tabular-nums text-muted-foreground">{count}</span>}
+          <span className="truncate text-xs font-semibold [writing-mode:vertical-rl]" style={{ color: meta.accent }}>{meta.title}</span>
+        </button>
+      </div>
     );
   }
 
   return (
-    <div className="board-column flex h-full w-72 shrink-0 flex-col" style={{ background: tint }}>
-      <button
-        type="button"
-        onClick={onToggle}
-        title={`Collapse ${column.name}`}
-        className="flex shrink-0 cursor-pointer items-center gap-2 px-2 py-1.5 text-left"
-      >
-        <span className="truncate text-xs font-semibold">{column.name}</span>
-        <span className="ml-auto shrink-0 text-[0.65rem] tabular-nums text-muted-foreground">{column.items.length}</span>
-        <ChevronLeft className="size-3 shrink-0 text-muted-foreground" />
-      </button>
-      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-1 pb-1">
-        {column.items.map((item) => (
-          <div key={item.id} className="board-card">
-            <div className="line-clamp-2 text-xs leading-snug">
-              {item.url ? <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> : item.title}
-            </div>
-            <div className="mt-1 flex items-center gap-1.5 text-[0.65rem] text-muted-foreground">
-              {item.repository && <span>{item.repository.split("/")[1]}{item.number ? `#${item.number}` : ""}</span>}
-              <span>{item.type === "PullRequest" ? "PR" : item.type === "DraftIssue" ? "draft" : "issue"}</span>
-              {item.state && <span className={stateClass(item.state)}>{item.state.toLowerCase()}</span>}
-              {item.assignees.length > 0 && (
-                <span className="ml-auto flex items-center gap-1 truncate" title={`Assigned to ${item.assignees.join(", ")}`}>
-                  <UserRound className="size-3 shrink-0" />
-                  <span className="truncate">{item.assignees.join(", ")}</span>
-                </span>
-              )}
-            </div>
-          </div>
-        ))}
+    <div className={`flex min-h-0 flex-col overflow-hidden rounded-md border border-border ${collapsed ? "" : "h-full"} ${dragging ? "opacity-40" : ""}`} style={{ background: tint }}>
+      <div className="flex shrink-0 items-center gap-1.5 px-1.5 py-0.5">
+        <span draggable onDragStart={onDragStart} className="cursor-grab text-muted-foreground active:cursor-grabbing" title="Drag to move pane">
+          <GripVertical className="size-3.5" />
+        </span>
+        <button type="button" onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+          <span className="truncate text-xs font-semibold" style={{ color: meta.accent }}>{meta.title}</span>
+          {count != null && <span className="shrink-0 text-[0.65rem] tabular-nums text-muted-foreground">{count}</span>}
+        </button>
+        {headerExtra}
+        <button type="button" onClick={onToggle} className="shrink-0 text-muted-foreground" aria-label={collapsed ? "Expand" : "Collapse"}>
+          {collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
+        </button>
       </div>
+      {!collapsed && <div className={`min-h-0 flex-1 ${scroll ? "overflow-y-auto" : "overflow-hidden"}`}>{children}</div>}
     </div>
   );
 }
 
-function ResizeHandle({ orientation }: { orientation: "horizontal" | "vertical" }) {
-  return <Separator className={`resize-handle resize-handle-${orientation}`} />;
+// Drop slot between/around panes inside a lane (reorder / restack).
+function PaneDrop({ onDrop, trailing }: { onDrop: () => void; trailing?: boolean }) {
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      onDragOver={(event) => {
+        event.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setOver(false);
+        onDrop();
+      }}
+      className={`shrink-0 rounded ${trailing ? "min-h-3 flex-1" : "h-3"} ${over ? "bg-[var(--ctp-blue)]/60" : "bg-[var(--ctp-surface0)]/40"}`}
+    />
+  );
+}
+
+// Pointer-driven resize reporting the new absolute size. For axis y it measures
+// the previous sibling (pane wrapper). For axis x it can't measure (lanes grow
+// to fill, so rendered width != basis), so the caller supplies the start basis
+// via getStart.
+function ResizeHandle({ axis, getStart, onResize }: { axis: "x" | "y"; getStart?: () => number; onResize: (value: number) => void }) {
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startPos = axis === "x" ? event.clientX : event.clientY;
+    let start: number;
+    if (getStart) {
+      start = getStart();
+    } else {
+      const prev = event.currentTarget.previousElementSibling as HTMLElement | null;
+      if (!prev) return;
+      const rect = prev.getBoundingClientRect();
+      start = axis === "x" ? rect.width : rect.height;
+    }
+    const move = (moveEvent: PointerEvent) => onResize(start + ((axis === "x" ? moveEvent.clientX : moveEvent.clientY) - startPos));
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  return (
+    <div
+      onPointerDown={onPointerDown}
+      className={
+        axis === "x"
+          ? "w-1 shrink-0 cursor-col-resize self-stretch rounded bg-[var(--ctp-surface0)]/40 hover:bg-[var(--ctp-blue)]"
+          : "h-1 shrink-0 cursor-row-resize rounded bg-[var(--ctp-surface0)]/40 hover:bg-[var(--ctp-blue)]"
+      }
+    />
+  );
+}
+
+// Drop slot between/around lanes (move pane into its own new lane).
+function LaneGap({ onDrop }: { onDrop: () => void }) {
+  const [over, setOver] = useState(false);
+  return (
+    <div
+      onDragOver={(event) => {
+        event.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setOver(false);
+        onDrop();
+      }}
+      className={`h-full w-2 shrink-0 self-stretch rounded ${over ? "bg-[var(--ctp-blue)]/60" : "bg-[var(--ctp-surface0)]/40"}`}
+    />
+  );
+}
+
+function BoardCard({ item }: { item: BoardItem }) {
+  return (
+    <div className="board-card">
+      <div className="line-clamp-2 text-xs leading-snug">
+        {item.url ? <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> : item.title}
+      </div>
+      <div className="mt-1 flex items-center gap-1.5 text-[0.65rem] text-muted-foreground">
+        {item.repository && <span>{item.repository.split("/")[1]}{item.number ? `#${item.number}` : ""}</span>}
+        <span>{item.type === "PullRequest" ? "PR" : item.type === "DraftIssue" ? "draft" : "issue"}</span>
+        {item.state && <span className={stateClass(item.state)}>{item.state.toLowerCase()}</span>}
+        {item.assignees.length > 0 && (
+          <span className="ml-auto flex items-center gap-1 truncate" title={`Assigned to ${item.assignees.join(", ")}`}>
+            <UserRound className="size-3 shrink-0" />
+            <span className="truncate">{item.assignees.join(", ")}</span>
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }

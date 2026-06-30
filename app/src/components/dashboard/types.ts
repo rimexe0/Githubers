@@ -46,6 +46,61 @@ export type Change = {
   project_title: string | null;
 };
 
+export type LinkedRef = {
+  relation: "closes" | "references";
+  repository: string | null;
+  number: number;
+  url: string | null;
+  title?: string | null;
+};
+
+export type ActivityEvent = {
+  id: string;
+  changeType: string;
+  kind: string | null;
+  verb: string | null;
+  actor: string | null;
+  title: string | null;
+  url: string | null;
+  summary: string | null;
+  before: unknown;
+  after: unknown;
+  linkedRefs: LinkedRef[];
+  source: string;
+  occurredAt: string;
+  unread: boolean;
+};
+
+export type LinkedPr = {
+  number: number;
+  repository: string | null;
+  url: string | null;
+  state: string | null;
+};
+
+export type ActivityThread = {
+  key: string;
+  contentId: string | null;
+  subjectType: string;
+  repository: string | null;
+  number: number | null;
+  title: string | null;
+  url: string | null;
+  state: string | null;
+  project: { ownerLogin: string | null; projectNumber: number | null; title: string | null } | null;
+  events: ActivityEvent[];
+  linkedRefs: LinkedRef[];
+  linkedPrs: LinkedPr[];
+  lastEventAt: string;
+  unreadCount: number;
+  done: boolean;
+};
+
+export type ActivityResponse = {
+  threads: ActivityThread[];
+  facets: { repositories: string[]; actors: string[]; kinds: string[] };
+};
+
 export type SyncRun = {
   id: string;
   trigger: string;

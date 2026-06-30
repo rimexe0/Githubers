@@ -22,11 +22,29 @@ export type ProjectV2ItemNode = {
     assignees?: {
       nodes: { login: string }[];
     };
+    labels?: {
+      nodes: { name: string; color: string }[];
+    };
+    reviews?: {
+      nodes: ReviewNode[];
+    };
+    closingIssuesReferences?: {
+      nodes: { number: number; title?: string; url?: string; repository?: { nameWithOwner: string } }[];
+    };
     updatedAt?: string;
     comments?: {
       nodes: CommentNode[];
     };
   } | null;
+};
+
+export type ReviewNode = {
+  id: string;
+  state: string;
+  body: string;
+  url: string;
+  submittedAt: string | null;
+  author?: { login: string } | null;
 };
 
 export type CommentNode = {
@@ -89,8 +107,8 @@ const projectQuery = `
             }
             content {
               __typename
-              ... on Issue { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
-              ... on PullRequest { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
+              ... on Issue { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } labels(first: 10) { nodes { name color } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
+              ... on PullRequest { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } labels(first: 10) { nodes { name color } } reviews(last: 20) { nodes { id state body url submittedAt author { login } } } closingIssuesReferences(first: 10) { nodes { number title url repository { nameWithOwner } } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
               ... on DraftIssue { id title }
             }
           }
@@ -117,8 +135,8 @@ const projectQuery = `
             }
             content {
               __typename
-              ... on Issue { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
-              ... on PullRequest { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
+              ... on Issue { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } labels(first: 10) { nodes { name color } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
+              ... on PullRequest { id title state url number updatedAt author { login } assignees(first: 5) { nodes { login } } labels(first: 10) { nodes { name color } } reviews(last: 20) { nodes { id state body url submittedAt author { login } } } closingIssuesReferences(first: 10) { nodes { number title url repository { nameWithOwner } } } repository { nameWithOwner } comments(first: $commentPollLimit, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { id body url createdAt updatedAt author { login } } } }
               ... on DraftIssue { id title }
             }
           }

@@ -19,7 +19,7 @@ export function relativeTime(iso: string) {
   return `${Math.floor(seconds / 86400)}d`;
 }
 
-export const staticTabs = ["activity", "summaries", "settings"];
+export const staticTabs = ["summaries", "settings"];
 
 export function stateClass(state: string | null) {
   if (state === "OPEN") return "state-open";

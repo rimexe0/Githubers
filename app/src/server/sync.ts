@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { query } from "@/db/client";
-import type { CommentNode, ProjectV2ItemNode } from "@/server/github";
+import type { LinkedRef } from "@/server/events";
+import { diffFields, diffIssuePr, reviewVerb, snapshotKind } from "@/server/events";
+import type { CommentNode, ProjectV2ItemNode, ReviewNode } from "@/server/github";
 import { fetchProjectState, fetchProjectUpdatedAts } from "@/server/github";
 import { listProjects } from "@/server/projects";
 import { getSettings } from "@/server/settings";
@@ -17,11 +19,34 @@ function contentWithoutComments(content: ProjectV2ItemNode["content"]) {
   return rest;
 }
 
+// The hashed issue/PR snapshot: drop the high-churn collections AND the
+// volatile updatedAt, so the diff only fires on meaningful metadata moves
+// (state/title/assignees/labels) — not every time GitHub bumps the timestamp.
+// Reviews and linked refs are tracked through their own paths.
+function issuePrSnapshot(content: NonNullable<ProjectV2ItemNode["content"]>) {
+  const { comments: _comments, reviews: _reviews, closingIssuesReferences: _refs, updatedAt: _updatedAt, ...rest } = content;
+  return rest;
+}
+
+function githubTime(iso: string | undefined | null): Date {
+  return iso ? new Date(iso) : new Date();
+}
+
+function closingRefs(content: NonNullable<ProjectV2ItemNode["content"]>): LinkedRef[] {
+  return (content.closingIssuesReferences?.nodes ?? []).map((node) => ({
+    relation: "closes" as const,
+    repository: node.repository?.nameWithOwner ?? null,
+    number: node.number,
+    url: node.url ?? null,
+    title: node.title ?? null,
+  }));
+}
+
 async function recordIssuePrSnapshot(project: SyncProject, item: ProjectV2ItemNode) {
   const content = item.content;
   if (!content?.id || !["Issue", "PullRequest"].includes(content.__typename)) return 0;
 
-  const snapshot = contentWithoutComments(content);
+  const snapshot = issuePrSnapshot(content);
   const snapshotHash = hashJson(snapshot);
   const previous = await query<{ snapshot_hash: string; snapshot: unknown }>(
     `SELECT snapshot_hash, snapshot FROM issue_pr_snapshots
@@ -33,34 +58,96 @@ async function recordIssuePrSnapshot(project: SyncProject, item: ProjectV2ItemNo
 
   if (previous.rowCount !== 0 && previous.rows[0].snapshot_hash === snapshotHash) return 0;
 
-  const insertSnapshot = () => query("INSERT INTO issue_pr_snapshots (project_id, content_id, snapshot, snapshot_hash) VALUES ($1, $2, $3::jsonb, $4)", [
+  await query("INSERT INTO issue_pr_snapshots (project_id, content_id, snapshot, snapshot_hash) VALUES ($1, $2, $3::jsonb, $4)", [
     project.id,
     content.id,
     JSON.stringify(snapshot),
     snapshotHash,
   ]);
 
-  if (previous.rowCount === 0) {
-    await insertSnapshot();
-    return 0;
+  // First time we snapshot this issue/PR: project_item_added already announced
+  // it, so just establish a baseline without a noisy change row.
+  if (previous.rowCount === 0) return 0;
+
+  const kind = snapshotKind(snapshot);
+  const linkedRefs = closingRefs(content);
+  const occurredAt = githubTime(content.updatedAt);
+  const diffs = diffIssuePr(previous.rows[0].snapshot as Parameters<typeof diffIssuePr>[0], snapshot);
+
+  for (const diff of diffs) {
+    await query(
+      `INSERT INTO changes
+         (project_id, repository, content_id, change_type, event_kind, event_verb, subject_number, linked_refs, actor_login, title, url, summary, before_value, after_value, raw, source, occurred_at)
+       VALUES ($1, $2, $3, 'issue_pr_changed', $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14::jsonb, 'poll', $15)`,
+      [
+        project.id,
+        content.repository?.nameWithOwner ?? null,
+        content.id,
+        kind,
+        diff.eventVerb,
+        content.number ?? null,
+        JSON.stringify(linkedRefs),
+        content.author?.login ?? null,
+        content.title ?? `${content.__typename} ${content.id}`,
+        content.url ?? null,
+        `${content.__typename} ${diff.eventVerb.replace(/_/g, " ")}.`,
+        JSON.stringify(diff.before),
+        JSON.stringify(diff.after),
+        JSON.stringify({ content: snapshot }),
+        occurredAt,
+      ],
+    );
   }
 
-  await insertSnapshot();
+  return diffs.length;
+}
+
+async function recordReviews(project: SyncProject, item: ProjectV2ItemNode) {
+  const content = item.content;
+  if (!content?.id || content.__typename !== "PullRequest" || !content.reviews?.nodes.length) return 0;
+  const results = await Promise.all(content.reviews.nodes.map((review) => recordReview(project, item, review)));
+  return results.reduce((total, count) => total + count, 0);
+}
+
+async function recordReview(project: SyncProject, item: ProjectV2ItemNode, review: ReviewNode): Promise<number> {
+  const content = item.content;
+  if (!content?.id) return 0;
+
+  const previous = await query<{ state: string | null }>(
+    "SELECT state FROM pr_reviews WHERE project_id = $1 AND github_review_id = $2",
+    [project.id, review.id],
+  );
+  const submittedAt = review.submittedAt ? new Date(review.submittedAt) : new Date();
 
   await query(
-    `INSERT INTO changes (project_id, repository, content_id, change_type, actor_login, title, url, summary, before_value, after_value, raw, source, occurred_at)
-     VALUES ($1, $2, $3, 'issue_pr_changed', $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, 'poll', now())`,
+    `INSERT INTO pr_reviews (project_id, content_id, github_review_id, author_login, state, body, url, submitted_at, raw)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+     ON CONFLICT (project_id, github_review_id) DO UPDATE SET
+       state = EXCLUDED.state, body = EXCLUDED.body, url = EXCLUDED.url, submitted_at = EXCLUDED.submitted_at, raw = EXCLUDED.raw`,
+    [project.id, content.id, review.id, review.author?.login ?? null, review.state, review.body, review.url, submittedAt, JSON.stringify(review)],
+  );
+
+  const isNew = previous.rowCount === 0;
+  if (!isNew && previous.rows[0].state === review.state) return 0;
+
+  await query(
+    `INSERT INTO changes
+       (project_id, repository, content_id, change_type, event_kind, event_verb, subject_number, linked_refs, actor_login, title, url, summary, after_value, raw, source, occurred_at)
+     VALUES ($1, $2, $3, 'review', 'review', $4, $5, $6::jsonb, $7, $8, $9, $10, $11::jsonb, $12::jsonb, 'poll', $13)`,
     [
       project.id,
       content.repository?.nameWithOwner ?? null,
       content.id,
-      content.author?.login ?? null,
-      content.title ?? `${content.__typename} ${content.id}`,
-      content.url ?? null,
-      `${content.__typename} metadata changed during sync.`,
-      JSON.stringify(previous.rows[0].snapshot),
-      JSON.stringify(snapshot),
-      JSON.stringify({ content: snapshot }),
+      reviewVerb(review.state),
+      content.number ?? null,
+      JSON.stringify(closingRefs(content)),
+      review.author?.login ?? null,
+      content.title ?? `PullRequest ${content.id}`,
+      review.url,
+      review.body?.trim() ? review.body : `Review ${review.state.toLowerCase()}.`,
+      JSON.stringify({ state: review.state }),
+      JSON.stringify(review),
+      submittedAt,
     ],
   );
 
@@ -105,20 +192,24 @@ async function recordComment(project: SyncProject, item: ProjectV2ItemNode, comm
     previous.rows[0].github_updated_at?.toISOString() !== commentUpdatedAt?.toISOString();
   if (!isChanged) return 0;
 
-  const changeType = previous.rowCount === 0 ? "comment_added" : "comment_changed";
+  const isNew = previous.rowCount === 0;
+  const changeType = isNew ? "comment_added" : "comment_changed";
   await query(
-    `INSERT INTO changes (project_id, repository, content_id, change_type, actor_login, title, url, summary, before_value, after_value, raw, source, occurred_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, 'poll', $12)`,
+    `INSERT INTO changes
+       (project_id, repository, content_id, change_type, event_kind, event_verb, subject_number, actor_login, title, url, summary, before_value, after_value, raw, source, occurred_at)
+     VALUES ($1, $2, $3, $4, 'comment', $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, 'poll', $14)`,
     [
       project.id,
       content.repository?.nameWithOwner ?? null,
       content.id,
       changeType,
+      isNew ? "commented" : "comment_edited",
+      content.number ?? null,
       comment.author?.login ?? null,
       content.title ?? `${content.__typename} comment`,
       comment.url,
-      previous.rowCount === 0 ? "New comment discovered during sync." : "Comment changed during sync.",
-      previous.rowCount === 0 ? null : JSON.stringify(previous.rows[0].raw),
+      comment.body?.trim() ? comment.body : isNew ? "(empty comment)" : "(comment edited)",
+      isNew ? null : JSON.stringify(previous.rows[0].raw),
       JSON.stringify(comment),
       JSON.stringify({ comment, content: contentWithoutComments(content) }),
       commentUpdatedAt ?? new Date(),
@@ -131,14 +222,18 @@ async function recordComment(project: SyncProject, item: ProjectV2ItemNode, comm
 async function processProjectItem(project: SyncProject, item: ProjectV2ItemNode) {
   let changesFound = 0;
   const content = item.content ?? null;
-  const itemContent = contentWithoutComments(content);
+  // Board-level snapshot: only the project fields (status column, custom
+  // fields). Content metadata changes (state/title/assignees/labels) are owned
+  // by recordIssuePrSnapshot, so they don't double-emit here.
   const snapshot = {
     githubItemId: item.id,
     type: item.type,
-    content: itemContent,
     fieldValues: item.fieldValues.nodes,
   };
   const snapshotHash = hashJson(snapshot);
+  // The board renders from project_items.raw, so it needs the content; the
+  // hash above stays content-free so board-field moves are what trigger here.
+  const boardRaw = { ...snapshot, content: contentWithoutComments(content) };
 
   const previous = await query<{ snapshot_hash: string; snapshot: unknown }>(
     `SELECT snapshot_hash, snapshot FROM item_snapshots
@@ -159,7 +254,7 @@ async function processProjectItem(project: SyncProject, item: ProjectV2ItemNode)
        state = EXCLUDED.state,
        raw = EXCLUDED.raw,
        updated_at = now()`,
-    [project.id, item.id, content?.__typename ?? item.type, content?.id ?? null, content?.url ?? null, content?.title ?? null, content?.state ?? null, JSON.stringify(snapshot)],
+    [project.id, item.id, content?.__typename ?? item.type, content?.id ?? null, content?.url ?? null, content?.title ?? null, content?.state ?? null, JSON.stringify(boardRaw)],
   );
 
   if (previous.rowCount === 0 || previous.rows[0].snapshot_hash !== snapshotHash) {
@@ -168,29 +263,44 @@ async function processProjectItem(project: SyncProject, item: ProjectV2ItemNode)
       [project.id, item.id, JSON.stringify(snapshot), snapshotHash],
     );
 
-    const changeType = previous.rowCount === 0 ? "project_item_added" : "project_item_changed";
-    await query(
-      `INSERT INTO changes (project_id, repository, content_id, change_type, actor_login, title, url, summary, before_value, after_value, raw, source, occurred_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, 'poll', now())`,
-      [
-        project.id,
-        content?.repository?.nameWithOwner ?? null,
-        content?.id ?? item.id,
-        changeType,
-        content?.author?.login ?? null,
-        content?.title ?? `Project item ${item.id}`,
-        content?.url ?? null,
-        previous.rowCount === 0 ? "Project item discovered during sync." : "Project item snapshot changed during sync.",
-        previous.rowCount === 0 ? null : JSON.stringify(previous.rows[0].snapshot),
-        JSON.stringify(snapshot),
-        JSON.stringify({ item }),
-      ],
-    );
-    changesFound += 1;
+    const isNew = previous.rowCount === 0;
+    const previousSnapshot = isNew ? null : (previous.rows[0].snapshot as { fieldValues?: unknown });
+    const fieldsDiff = isNew ? "" : diffFields(previousSnapshot?.fieldValues, item.fieldValues.nodes);
+
+    // Only record a board event when the item is newly added or a field
+    // actually moved — not when the snapshot churned for some other reason.
+    if (isNew || fieldsDiff) {
+      await query(
+        `INSERT INTO changes
+           (project_id, repository, content_id, change_type, event_kind, event_verb, subject_number, actor_login, title, url, summary, before_value, after_value, raw, source, occurred_at)
+         VALUES ($1, $2, $3, $4, 'project', $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, 'poll', $14)`,
+        [
+          project.id,
+          content?.repository?.nameWithOwner ?? null,
+          content?.id ?? item.id,
+          isNew ? "project_item_added" : "project_item_changed",
+          isNew ? "item_added" : "fields_changed",
+          content?.number ?? null,
+          content?.author?.login ?? null,
+          content?.title ?? `Project item ${item.id}`,
+          content?.url ?? null,
+          isNew ? "Added to project." : fieldsDiff,
+          isNew ? null : JSON.stringify(previous.rows[0].snapshot),
+          JSON.stringify(snapshot),
+          JSON.stringify({ item }),
+          githubTime(content?.updatedAt),
+        ],
+      );
+      changesFound += 1;
+    }
   }
 
-  const [issuePrChanges, commentChanges] = await Promise.all([recordIssuePrSnapshot(project, item), recordComments(project, item)]);
-  return changesFound + issuePrChanges + commentChanges;
+  const [issuePrChanges, commentChanges, reviewChanges] = await Promise.all([
+    recordIssuePrSnapshot(project, item),
+    recordComments(project, item),
+    recordReviews(project, item),
+  ]);
+  return changesFound + issuePrChanges + commentChanges + reviewChanges;
 }
 
 async function processProject(project: SyncProject, githubToken: string, commentPollLimit: number) {
@@ -200,7 +310,7 @@ async function processProject(project: SyncProject, githubToken: string, comment
   return itemResults.reduce((total, count) => total + count, 0);
 }
 
-export async function runSync(trigger: "scheduled" | "manual" | "webhook" | "auto" = "manual") {
+export async function runSync(trigger: "scheduled" | "manual" | "webhook" | "auto" = "manual", projectId?: string) {
   const run = await query<{ id: string }>("INSERT INTO sync_runs (trigger, status) VALUES ($1, 'running') RETURNING id", [trigger]);
   const runId = run.rows[0].id;
   let projectsChecked = 0;
@@ -208,7 +318,7 @@ export async function runSync(trigger: "scheduled" | "manual" | "webhook" | "aut
 
   try {
     const settings = await getSettings();
-    const projects = (await listProjects()).filter((project) => project.enabled);
+    const projects = (await listProjects()).filter((project) => project.enabled && (!projectId || project.id === projectId));
 
     projectsChecked = projects.length;
     const projectResults = await Promise.all(projects.map((project) => processProject(project, settings.githubToken, settings.commentPollLimit)));

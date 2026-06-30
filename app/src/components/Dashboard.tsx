@@ -3,18 +3,16 @@
 import * as Tabs from "@radix-ui/react-tabs";
 import { useEffect, useReducer, useTransition } from "react";
 import { Button } from "@/components/ui/button";
-import { Changes } from "./dashboard/Changes";
 import { ProjectBoard } from "./dashboard/ProjectBoard";
 import { ProjectDialog } from "./dashboard/ProjectDialog";
 import { SettingsForm } from "./dashboard/SettingsForm";
 import { Summaries } from "./dashboard/Summaries";
-import { emptySettings, type Change, type Project, type Settings, type Summary, type SyncRun } from "./dashboard/types";
+import { emptySettings, type Project, type Settings, type Summary, type SyncRun } from "./dashboard/types";
 import { api, projectLabel, relativeTime, staticTabs } from "./dashboard/utils";
 
 type DashboardState = {
   settings: Settings;
   projects: Project[];
-  changes: Change[];
   syncRuns: SyncRun[];
   summaries: Summary[];
   message: string;
@@ -44,7 +42,6 @@ type DashboardUiAction =
 const initialDashboardState: DashboardState = {
   settings: emptySettings,
   projects: [],
-  changes: [],
   syncRuns: [],
   summaries: [],
   message: "Loading...",
@@ -82,19 +79,18 @@ export function Dashboard() {
   const [state, dispatch] = useReducer(dashboardReducer, initialDashboardState);
   const [ui, dispatchUi] = useReducer(dashboardUiReducer, initialDashboardUiState);
   const [isPending, startTransition] = useTransition();
-  const { settings, projects, changes, syncRuns, summaries, message } = state;
+  const { settings, projects, syncRuns, summaries, message } = state;
 
   const refresh = async () => {
-    const [nextSettings, nextProjects, nextChanges, nextSyncRuns, nextSummaries] = await Promise.all([
+    const [nextSettings, nextProjects, nextSyncRuns, nextSummaries] = await Promise.all([
       api<Settings>("/api/settings"),
       api<Project[]>("/api/projects"),
-      api<Change[]>("/api/changes"),
       api<SyncRun[]>("/api/sync"),
       api<Summary[]>("/api/summaries"),
     ]);
     dispatch({
       type: "loaded",
-      payload: { settings: nextSettings, projects: nextProjects, changes: nextChanges, syncRuns: nextSyncRuns, summaries: nextSummaries },
+      payload: { settings: nextSettings, projects: nextProjects, syncRuns: nextSyncRuns, summaries: nextSummaries },
     });
   };
 
@@ -146,7 +142,7 @@ export function Dashboard() {
   };
 
   const validTabs = [...projects.map((project) => project.id), ...staticTabs];
-  const activeTab = ui.selectedTab && validTabs.includes(ui.selectedTab) ? ui.selectedTab : (projects[0]?.id ?? "activity");
+  const activeTab = ui.selectedTab && validTabs.includes(ui.selectedTab) ? ui.selectedTab : (projects[0]?.id ?? "summaries");
   const latestSync = syncRuns[0];
 
   const changeTab = (value: string) => {
@@ -162,19 +158,38 @@ export function Dashboard() {
             {latestSync ? `last sync ${relativeTime(latestSync.started_at)} ago, ${latestSync.status}` : "no syncs yet"}
           </span>
           <span className="ml-auto truncate text-xs text-muted-foreground">{message}</span>
-          <Button
-            type="button"
-            size="xs"
-            disabled={isPending}
-            onClick={() =>
-              runAction("Sync", async () => {
-                await api("/api/sync", { method: "POST" });
-                dispatchUi({ type: "bumpBoardsKey" });
-              })
-            }
-          >
-            Sync
-          </Button>
+          <div className="flex items-center">
+            <Button
+              type="button"
+              size="xs"
+              className="rounded-r-none"
+              disabled={isPending || !projects.some((project) => project.id === activeTab)}
+              onClick={() =>
+                runAction("Sync", async () => {
+                  await api(`/api/projects/${activeTab}/sync`, { method: "POST" });
+                  dispatchUi({ type: "bumpBoardsKey" });
+                })
+              }
+            >
+              Sync
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="xs"
+              className="rounded-l-none border-l border-border/60"
+              disabled={isPending}
+              title="Sync all projects"
+              onClick={() =>
+                runAction("Sync all", async () => {
+                  await api("/api/sync", { method: "POST" });
+                  dispatchUi({ type: "bumpBoardsKey" });
+                })
+              }
+            >
+              All
+            </Button>
+          </div>
           <Button type="button" variant="secondary" size="xs" disabled={isPending} onClick={() => runAction("Summary", () => api("/api/summaries", { method: "POST" }))}>
             Summarize
           </Button>
@@ -191,7 +206,6 @@ export function Dashboard() {
               + project
             </button>
             <div className="mx-2 h-4 w-px bg-border" />
-            <Tabs.Trigger value="activity" className="tab-trigger">Activity</Tabs.Trigger>
             <Tabs.Trigger value="summaries" className="tab-trigger">Summaries</Tabs.Trigger>
             <Tabs.Trigger value="settings" className="tab-trigger">Settings</Tabs.Trigger>
           </Tabs.List>
@@ -207,12 +221,6 @@ export function Dashboard() {
               <ProjectBoard project={project} refreshKey={ui.boardsKey} onEdit={() => openEditProject(project)} onDelete={() => deleteProject(project)} />
             </Tabs.Content>
           ))}
-          {!projects.length && activeTab === "activity" && (
-            <div className="panel p-3 text-xs text-muted-foreground">No projects yet. Use + project to watch a GitHub Projects v2 board.</div>
-          )}
-          <Tabs.Content value="activity" className="panel min-h-0 flex-1 overflow-hidden p-3">
-            <Changes changes={changes} syncRuns={syncRuns} />
-          </Tabs.Content>
           <Tabs.Content value="summaries" className="panel min-h-0 flex-1 overflow-y-auto p-3">
             <Summaries summaries={summaries} />
           </Tabs.Content>
