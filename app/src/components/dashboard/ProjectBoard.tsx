@@ -23,8 +23,8 @@ import { Switch } from "@/components/ui/switch";
 import { Activity } from "./Activity";
 import { IssueRow } from "./IssueRow";
 import { PullRequestRow } from "./PullRequestRow";
-import type { BoardData, BoardItem, Project } from "./types";
-import { api, columnAccent, projectLabel, relativeTime, stateClass } from "./utils";
+import type { AutomatorRun, BoardData, BoardItem, Project } from "./types";
+import { api, columnAccent, projectLabel, relativeTime, runStateMeta, stateClass } from "./utils";
 
 type ProjectBoardState = {
   board: BoardData | null;
@@ -197,6 +197,28 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
   const [layout, setLayout] = useState<LaneLayout | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
 
+  // Agent run states keyed by "owner/repo#number", for the card badges. Loaded
+  // best-effort; when the automator is disabled the proxy 503s and we no-op.
+  const [runStates, setRunStates] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    api<AutomatorRun[]>("/api/automator/runs")
+      .then((runs) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const run of runs) {
+          if (run.githubRepo && run.issueNumber != null) map[`${run.githubRepo}#${run.issueNumber}`] = run.state;
+        }
+        setRunStates(map);
+      })
+      .catch(() => {
+        /* automator disabled or unreachable — no badges */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id, refreshKey]);
+
   // Resizing: explicit pane heights (vertical) and lane flex-basis (horizontal).
   // Lanes grow to fill the width, so basis is a starting size; the grow factor
   // distributes free space — a collapsed lane drops out and the rest expand.
@@ -367,7 +389,9 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
       const column = visibleColumns.find((entry) => entry.name === paneId.slice(4));
       return (
         <div className="flex flex-col gap-1 p-1">
-          {column?.items.map((item) => <BoardCard key={item.id} item={item} />)}
+          {column?.items.map((item) => (
+            <BoardCard key={item.id} item={item} runState={item.repository && item.number != null ? runStates[`${item.repository}#${item.number}`] : undefined} />
+          ))}
           {!column?.items.length && <div className="px-1 py-2 text-[0.65rem] text-muted-foreground">Empty</div>}
         </div>
       );
@@ -379,7 +403,7 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
           {board && !board.issuesError && !visibleIssues.length && (
             <div className="px-1 py-2 text-[0.65rem] text-muted-foreground">{board.repositories.length ? "No open issues." : "Link repos to list their open issues."}</div>
           )}
-          {visibleIssues.map((issue) => <IssueRow key={issue.id} issue={issue} />)}
+          {visibleIssues.map((issue) => <IssueRow key={issue.id} issue={issue} runState={runStates[`${issue.repository}#${issue.number}`]} />)}
         </div>
       );
     }
@@ -750,7 +774,8 @@ function LaneGap({ onDrop }: { onDrop: () => void }) {
   );
 }
 
-function BoardCard({ item }: { item: BoardItem }) {
+function BoardCard({ item, runState }: { item: BoardItem; runState?: string }) {
+  const run = runState ? runStateMeta(runState) : null;
   return (
     <div className="board-card">
       <div className="line-clamp-2 text-xs leading-snug">
@@ -760,6 +785,15 @@ function BoardCard({ item }: { item: BoardItem }) {
         {item.repository && <span>{item.repository.split("/")[1]}{item.number ? `#${item.number}` : ""}</span>}
         <span>{item.type === "PullRequest" ? "PR" : item.type === "DraftIssue" ? "draft" : "issue"}</span>
         {item.state && <span className={stateClass(item.state)}>{item.state.toLowerCase()}</span>}
+        {run && (
+          <span
+            className="rounded px-1 font-semibold"
+            style={{ background: `color-mix(in oklab, ${run.color} 18%, var(--ctp-mantle))`, color: run.color }}
+            title="Agent run state"
+          >
+            ⚙ {run.label}
+          </span>
+        )}
         {item.assignees.length > 0 && (
           <span className="ml-auto flex items-center gap-1 truncate" title={`Assigned to ${item.assignees.join(", ")}`}>
             <UserRound className="size-3 shrink-0" />

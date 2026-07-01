@@ -19,7 +19,24 @@ export function relativeTime(iso: string) {
   return `${Math.floor(seconds / 86400)}d`;
 }
 
-export const staticTabs = ["summaries", "settings"];
+export const staticTabs = ["chat", "agent-runs", "summaries", "settings"];
+
+// Colour + grouping for an AgentAutomator run state, reused by the runs panel
+// and the board card badges. Mirrors the daemon state machine in API_CONTRACT.
+export function runStateMeta(state: string | null): { label: string; color: string; needsHuman: boolean } {
+  const s = (state ?? "").toUpperCase();
+  if (s === "DONE") return { label: "done", color: "var(--ctp-green)", needsHuman: false };
+  if (s === "AWAITING_APPROVAL") return { label: "awaiting approval", color: "var(--ctp-mauve)", needsHuman: true };
+  if (s === "HUMAN_NEEDED") return { label: "human needed", color: "var(--ctp-peach)", needsHuman: true };
+  if (s === "FAILED") return { label: "failed", color: "var(--ctp-red)", needsHuman: true };
+  if (s === "STOPPED") return { label: "stopped", color: "var(--ctp-overlay1)", needsHuman: false };
+  if (s === "PAUSED") return { label: "paused", color: "var(--ctp-overlay1)", needsHuman: false };
+  if (s === "PR_OPENED") return { label: "pr opened", color: "var(--ctp-teal)", needsHuman: false };
+  if (s === "PR_READY") return { label: "pr ready", color: "var(--ctp-teal)", needsHuman: false };
+  if (["NEW", "PREFLIGHTING", "PLANNING", "READY_TO_BUILD"].includes(s)) return { label: s.toLowerCase().replace(/_/g, " "), color: "var(--ctp-blue)", needsHuman: false };
+  if (["BUILDING", "VALIDATING", "REVIEWING", "FIXING"].includes(s)) return { label: s.toLowerCase(), color: "var(--ctp-yellow)", needsHuman: false };
+  return { label: s ? s.toLowerCase().replace(/_/g, " ") : "unknown", color: "var(--ctp-lavender)", needsHuman: false };
+}
 
 export function stateClass(state: string | null) {
   if (state === "OPEN") return "state-open";

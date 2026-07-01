@@ -3,7 +3,9 @@
 import * as Tabs from "@radix-ui/react-tabs";
 import { useEffect, useReducer, useTransition } from "react";
 import { Button } from "@/components/ui/button";
+import { AgentRuns } from "./dashboard/AgentRuns";
 import { ProjectBoard } from "./dashboard/ProjectBoard";
+import { RepoChat } from "./dashboard/RepoChat";
 import { ProjectDialog } from "./dashboard/ProjectDialog";
 import { SettingsForm } from "./dashboard/SettingsForm";
 import { Summaries } from "./dashboard/Summaries";
@@ -152,7 +154,7 @@ export function Dashboard() {
   return (
     <main className="h-screen w-full">
       <div className="mx-auto flex h-full w-full max-w-full flex-col">
-        <header className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-3 py-1.5">
+        <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-card px-3 py-1.5">
           <span className="font-semibold tracking-tight text-[var(--ctp-mauve)]">githubers</span>
           <span className="text-xs text-muted-foreground">
             {latestSync ? `last sync ${relativeTime(latestSync.started_at)} ago, ${latestSync.status}` : "no syncs yet"}
@@ -206,6 +208,8 @@ export function Dashboard() {
               + project
             </button>
             <div className="mx-2 h-4 w-px bg-border" />
+            <Tabs.Trigger value="chat" className="tab-trigger">Chat</Tabs.Trigger>
+            <Tabs.Trigger value="agent-runs" className="tab-trigger">Agent runs</Tabs.Trigger>
             <Tabs.Trigger value="summaries" className="tab-trigger">Summaries</Tabs.Trigger>
             <Tabs.Trigger value="settings" className="tab-trigger">Settings</Tabs.Trigger>
           </Tabs.List>
@@ -221,6 +225,12 @@ export function Dashboard() {
               <ProjectBoard project={project} refreshKey={ui.boardsKey} onEdit={() => openEditProject(project)} onDelete={() => deleteProject(project)} />
             </Tabs.Content>
           ))}
+          <Tabs.Content value="chat" className="panel min-h-0 flex-1 overflow-hidden p-3">
+            <RepoChat settings={settings} />
+          </Tabs.Content>
+          <Tabs.Content value="agent-runs" className="panel min-h-0 flex-1 overflow-hidden p-3">
+            <AgentRuns settings={settings} />
+          </Tabs.Content>
           <Tabs.Content value="summaries" className="panel min-h-0 flex-1 overflow-y-auto p-3">
             <Summaries summaries={summaries} />
           </Tabs.Content>

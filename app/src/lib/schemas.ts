@@ -40,6 +40,14 @@ export const settingsSchema = z.object({
   telegramBotToken: z.string().optional().default(""),
   telegramChatId: z.string().optional().default(""),
   webhookSecret: z.string().optional().default(""),
+  // AgentAutomator daemon bridge. The repo->path map and trigger columns are
+  // stored as newline text (one "key=value" per line) to match the existing
+  // flat settings form; automator.ts parses them into maps.
+  automatorEnabled: z.boolean().optional().default(false),
+  automatorBaseUrl: z.string().default("http://host.docker.internal:3001/api/v1"),
+  automatorToken: z.string().optional().default(""),
+  automatorRepoPaths: z.string().optional().default(""), // "owner/repo=/local/clone/path" per line
+  automatorTriggers: z.string().optional().default(""), // "Column name=supervised|full_auto" per line
 });
 
 export type AppSettings = z.infer<typeof settingsSchema>;

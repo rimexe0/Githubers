@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { query } from "@/db/client";
+import { triggerRunsForBoard } from "@/server/automator";
 import type { LinkedRef } from "@/server/events";
 import { diffFields, diffIssuePr, reviewVerb, snapshotKind } from "@/server/events";
 import type { CommentNode, ProjectV2ItemNode, ReviewNode } from "@/server/github";
@@ -328,6 +329,18 @@ export async function runSync(trigger: "scheduled" | "manual" | "webhook" | "aut
       "UPDATE sync_runs SET status = 'success', finished_at = now(), projects_checked = $2, changes_found = $3 WHERE id = $1",
       [runId, projectsChecked, changesFound],
     );
+
+    // Best-effort: kick off agent runs for issues that landed in a trigger
+    // column. The daemon dedups by idempotency key, so re-firing each poll is
+    // safe, and a daemon outage must not fail the sync.
+    try {
+      const triggered = await triggerRunsForBoard(projectId);
+      if (triggered.triggered || triggered.errors) {
+        console.log(`automator: triggered ${triggered.triggered} run(s), ${triggered.skipped} skipped, ${triggered.errors} error(s)`);
+      }
+    } catch (error) {
+      console.error("automator: trigger pass failed", error);
+    }
   } catch (error) {
     await query("UPDATE sync_runs SET status = 'failed', finished_at = now(), projects_checked = $2, changes_found = $3, error = $4 WHERE id = $1", [
       runId,

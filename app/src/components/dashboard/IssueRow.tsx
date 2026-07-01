@@ -1,9 +1,10 @@
 import { GitPullRequest, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { OpenIssue } from "./types";
-import { relativeTime, stateClass } from "./utils";
+import { relativeTime, runStateMeta, stateClass } from "./utils";
 
-export function IssueRow({ issue }: { issue: OpenIssue }) {
+export function IssueRow({ issue, runState }: { issue: OpenIssue; runState?: string | null }) {
+  const run = runState ? runStateMeta(runState) : null;
   return (
     <div className="rounded-md bg-card px-2 py-1 text-xs transition-colors hover:bg-accent">
       <div className="flex items-baseline gap-1.5">
@@ -18,6 +19,11 @@ export function IssueRow({ issue }: { issue: OpenIssue }) {
           </span>
         ))}
         {issue.onBoard && <Badge variant="secondary" className="h-4 px-1 text-[0.6rem] text-[var(--ctp-teal)]">board</Badge>}
+        {run && (
+          <Badge variant="secondary" className="h-4 px-1 text-[0.6rem]" style={{ color: run.color }} title="Agent run state">
+            ⚙ {run.label}
+          </Badge>
+        )}
         <span className="ml-auto flex items-center gap-1" title={issue.assignees.length ? `Assigned to ${issue.assignees.join(", ")}` : "Unassigned"}>
           <UserRound className="size-3 shrink-0" />
           {issue.assignees.length ? issue.assignees.join(", ") : <span className="italic opacity-70">unassigned</span>}

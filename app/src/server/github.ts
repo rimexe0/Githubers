@@ -293,6 +293,65 @@ export async function fetchPullRequests(
   }));
 }
 
+// The project-state query deliberately omits issue bodies (they'd bloat every
+// snapshot and churn the hash). The automator trigger needs the raw markdown
+// body to send as source.body, so fetch it on demand only for the few issues
+// actually sitting in a trigger column. Returns "owner/repo#number" -> body.
+export async function fetchIssueBodies(
+  issues: { repository: string; number: number }[],
+  token: string,
+): Promise<Record<string, string>> {
+  if (!issues.length) return {};
+  if (!token) throw new Error("GitHub token is not configured");
+
+  const variableDefs = issues.map((_, index) => `$owner${index}: String!, $name${index}: String!, $number${index}: Int!`).join(", ");
+  const selections = issues
+    .map(
+      (_, index) => `
+        issue${index}: repository(owner: $owner${index}, name: $name${index}) {
+          issue(number: $number${index}) { number body }
+        }`,
+    )
+    .join("\n");
+
+  const variables: Record<string, string | number> = {};
+  issues.forEach((issue, index) => {
+    const [ownerLogin, repoName] = issue.repository.split("/");
+    variables[`owner${index}`] = ownerLogin;
+    variables[`name${index}`] = repoName;
+    variables[`number${index}`] = issue.number;
+  });
+
+  const response = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "user-agent": "github-project-change-watcher",
+    },
+    body: JSON.stringify({ query: `query IssueBodies(${variableDefs}) { ${selections} }`, variables }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub GraphQL failed: ${response.status} ${response.statusText}`);
+  }
+
+  const payload = (await response.json()) as {
+    data?: Record<string, { issue?: { number: number; body: string | null } | null } | null> | null;
+    errors?: { message: string }[];
+  };
+  if (payload.errors?.length && !payload.data) {
+    throw new Error(formatGraphQlErrors(payload.errors));
+  }
+
+  const bodies: Record<string, string> = {};
+  issues.forEach((issue, index) => {
+    const body = payload.data?.[`issue${index}`]?.issue?.body;
+    bodies[`${issue.repository}#${issue.number}`] = body ?? "";
+  });
+  return bodies;
+}
+
 type UpdatedAtResponse = {
   data?: Record<string, { projectV2?: { updatedAt: string } | null } | null> | null;
   errors?: { message: string }[];

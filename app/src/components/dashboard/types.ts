@@ -20,6 +20,11 @@ export type Settings = {
   telegramBotToken: string;
   telegramChatId: string;
   webhookSecret: string;
+  automatorEnabled: boolean;
+  automatorBaseUrl: string;
+  automatorToken: string;
+  automatorRepoPaths: string;
+  automatorTriggers: string;
 };
 
 export type Project = {
@@ -208,4 +213,60 @@ export const emptySettings: Settings = {
   telegramBotToken: "",
   telegramChatId: "",
   webhookSecret: "",
+  automatorEnabled: false,
+  automatorBaseUrl: "http://host.docker.internal:3001/api/v1",
+  automatorToken: "",
+  automatorRepoPaths: "",
+  automatorTriggers: "",
+};
+
+export type AutomatorRunState =
+  | "NEW"
+  | "PREFLIGHTING"
+  | "PLANNING"
+  | "READY_TO_BUILD"
+  | "BUILDING"
+  | "VALIDATING"
+  | "REVIEWING"
+  | "FIXING"
+  | "PR_READY"
+  | "AWAITING_APPROVAL"
+  | "PR_OPENED"
+  | "DONE"
+  | "HUMAN_NEEDED"
+  | "FAILED"
+  | "STOPPED"
+  | "PAUSED"
+  | (string & {});
+
+export type AutomatorRun = {
+  id: string;
+  state: AutomatorRunState;
+  awaitingHuman: boolean;
+  autonomy: "supervised" | "full_auto" | string;
+  repoPath: string | null;
+  githubRepo: string | null;
+  issueNumber: number | null;
+  branch: string | null;
+  baseRef: string | null;
+  dependsOn: unknown[];
+  failedCycleCount: number;
+  activeStep?: string | null;
+  prUrl: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AutomatorStep = {
+  step: string;
+  status: string;
+  durationMs?: number;
+  summary?: string;
+  ts: string;
+};
+
+export type AutomatorRunDetail = {
+  run: AutomatorRun;
+  artifacts: string[];
 };
