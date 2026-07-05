@@ -134,7 +134,8 @@ function ImportStep({ enabled, onDone }: { enabled: boolean; onDone: () => void 
   }
 
   const running = isRunning(status);
-  const done = status?.phase === "done";
+  const finished = status?.phase === "done" || status?.phase === "stopped";
+  const failed = status?.phase === "failed";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
@@ -146,9 +147,9 @@ function ImportStep({ enabled, onDone }: { enabled: boolean; onDone: () => void 
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" disabled={starting || running} onClick={start}>
           {running ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-          {running ? "Import running…" : starting ? "Starting…" : done ? "Re-run import" : "Start import"}
+          {running ? "Import running…" : starting ? "Starting…" : finished || failed ? "Re-run import" : "Start import"}
         </Button>
-        {done && (
+        {finished && (
           <Button type="button" size="sm" variant="secondary" onClick={onDone}>
             View receipts
           </Button>
@@ -175,17 +176,20 @@ const PHASE_LABEL: Record<string, string> = {
 };
 
 function PhaseTracker({ status }: { status: ImportStatus }) {
-  const currentIndex = PHASE_ORDER.indexOf(status.phase as (typeof PHASE_ORDER)[number]);
   const stats = status.stats ?? {};
-  const rateLimitSeconds = remainingSeconds(status.rateLimitedUntil);
+  const terminal = status.phase === "stopped" || status.phase === "failed";
+  // On stopped/failed the run's status no longer names a pipeline phase; anchor
+  // progress on how far the stats show it got so the ticks stay truthful.
+  const rawIndex = PHASE_ORDER.indexOf(status.phase as (typeof PHASE_ORDER)[number]);
+  const reachedIndex = rawIndex >= 0 ? rawIndex : typeof stats.batchTotal === "number" ? 1 : 0;
 
   return (
     <div className="space-y-2.5 rounded-md border border-border bg-[var(--ctp-mantle)] p-3">
       <ol className="space-y-1.5">
         {PHASE_ORDER.map((phase, index) => {
-          const reached = currentIndex >= index && currentIndex >= 0;
+          const reached = reachedIndex >= index;
           const active = status.phase === phase && phase !== "done";
-          const complete = currentIndex > index || (phase === "done" && status.phase === "done");
+          const complete = reachedIndex > index || (phase === "done" && status.phase === "done");
           return (
             <li key={phase} className="flex items-center gap-2 text-xs">
               <span
@@ -205,9 +209,16 @@ function PhaseTracker({ status }: { status: ImportStatus }) {
         })}
       </ol>
 
-      {rateLimitSeconds > 0 && (
-        <div className="rounded bg-[var(--ctp-peach)]/10 px-2 py-1 text-[0.65rem] text-[var(--ctp-peach)]">
-          Rate-limited — resuming in ~{rateLimitSeconds}s
+      {terminal && (
+        <div
+          className="rounded px-2 py-1 text-[0.65rem]"
+          style={
+            status.phase === "failed"
+              ? { background: "color-mix(in oklab, var(--ctp-red) 12%, transparent)", color: "var(--ctp-red)" }
+              : { background: "color-mix(in oklab, var(--ctp-peach) 12%, transparent)", color: "var(--ctp-peach)" }
+          }
+        >
+          {status.phase === "failed" ? "Import failed" : "Stopped early"} — kept everything mined so far.
         </div>
       )}
 
@@ -221,12 +232,6 @@ function PhaseTracker({ status }: { status: ImportStatus }) {
       {status.error && <p className="text-[0.65rem] text-destructive">{status.error}</p>}
     </div>
   );
-}
-
-function remainingSeconds(iso?: string | null): number {
-  if (!iso) return 0;
-  const ms = new Date(iso).getTime() - Date.now();
-  return ms > 0 ? Math.ceil(ms / 1000) : 0;
 }
 
 function Offline({ reason, onRetry, onSample, status }: { reason: string; onRetry?: () => void; onSample: () => void; status: ImportStatus | null }) {

@@ -268,7 +268,7 @@ export type PendingRule = {
 export type RuleDecision = { status: "approved" | "rejected"; editedText?: string };
 
 export type DoctorFinding = {
-  severity: "info" | "warn" | "error" | (string & {});
+  severity: "high" | "medium" | "low" | (string & {});
   quote: string;
   problem: string;
   suggestedRewrite: string;
@@ -279,22 +279,72 @@ export type DoctorResult = {
   findings: DoctorFinding[];
 };
 
-// The daemon may return a bare array or wrap it in a named key; accept both.
-function asArray<T>(data: unknown, key: string): T[] {
-  if (Array.isArray(data)) return data as T[];
-  if (data && typeof data === "object" && Array.isArray((data as Record<string, unknown>)[key])) {
-    return (data as Record<string, T[]>)[key];
-  }
-  return [];
+// The daemon persists everything as snake_case SQLite rows and returns them
+// mostly verbatim (import-store.ts). These adapters normalize the wire shape
+// into the camelCase contract the UI consumes so the client stays clean.
+
+// GET /import-chats → { run: <import_runs row> | null, active, activeRunId }.
+type RawImportRun = {
+  id: string;
+  status: string;
+  stats?: Record<string, unknown>;
+  stopped_reason?: string | null;
+  error?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+} | null;
+
+type RawImportEnvelope = { run: RawImportRun; active?: boolean; activeRunId?: string | null };
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeStatus(raw: RawImportEnvelope): ImportStatus {
+  const run = raw?.run ?? null;
+  const stats = (run?.stats ?? {}) as Record<string, unknown>;
+  const claude = asNumber(stats.claudeSessions);
+  const codex = asNumber(stats.codexSessions);
+  const sessionsScanned = claude !== undefined || codex !== undefined ? (claude ?? 0) + (codex ?? 0) : undefined;
+  return {
+    active: Boolean(raw?.active),
+    phase: (run?.status ?? "idle") as ImportPhase,
+    stats: {
+      sessionsScanned,
+      candidatesFound: asNumber(stats.candidates),
+      lessonsSynthesized: asNumber(stats.lessons) ?? asNumber(stats.synthesizedRules),
+      batchIndex: asNumber(stats.completedBatches),
+      batchTotal: asNumber(stats.totalBatches),
+    },
+    // The daemon surfaces rate-limit waits only on the /events stream; the polled
+    // status carries stopped_reason once a run ends early.
+    message: run?.stopped_reason ?? null,
+    error: run?.error ?? null,
+    startedAt: run?.started_at ?? null,
+    finishedAt: run?.finished_at ?? null,
+  };
 }
 
 export async function startImport(config: AutomatorConfig): Promise<ImportStatus> {
-  return requestJson<ImportStatus>(config, "/import-chats", { method: "POST", body: "{}" });
+  const raw = await requestJson<RawImportEnvelope>(config, "/import-chats", { method: "POST", body: "{}" });
+  return normalizeStatus(raw);
 }
 
 export async function getImportStatus(config: AutomatorConfig): Promise<ImportStatus> {
-  return requestJson<ImportStatus>(config, "/import-chats");
+  const raw = await requestJson<RawImportEnvelope>(config, "/import-chats");
+  return normalizeStatus(raw);
 }
+
+type RawCandidate = {
+  id: number;
+  source: string;
+  project: string;
+  timestamp: string | null;
+  score: number;
+  signals: string[];
+  user_message: string;
+  assistant_before: string | null;
+};
 
 export async function getImportCandidates(
   config: AutomatorConfig,
@@ -305,18 +355,51 @@ export async function getImportCandidates(
   if (params.signal) search.set("signal", params.signal);
   if (params.source) search.set("source", params.source);
   const qs = search.toString();
-  const data = await requestJson<unknown>(config, `/import-chats/candidates${qs ? `?${qs}` : ""}`);
-  return asArray<ImportCandidate>(data, "candidates");
+  const rows = await requestJson<RawCandidate[]>(config, `/import-chats/candidates${qs ? `?${qs}` : ""}`);
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: String(row.id),
+    source: row.source,
+    project: row.project,
+    timestamp: row.timestamp ?? "",
+    score: row.score,
+    signals: Array.isArray(row.signals) ? row.signals : [],
+    userMessage: row.user_message,
+    assistantBefore: row.assistant_before ?? "",
+  }));
 }
+
+type RawLesson = { id: number; candidate_id: number | null; lesson: string; scope: string; category: string };
 
 export async function getImportLessons(config: AutomatorConfig): Promise<ImportLesson[]> {
-  const data = await requestJson<unknown>(config, "/import-chats/lessons");
-  return asArray<ImportLesson>(data, "lessons");
+  const rows = await requestJson<RawLesson[]>(config, "/import-chats/lessons");
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: String(row.id),
+    candidateId: row.candidate_id != null ? String(row.candidate_id) : undefined,
+    rule: row.lesson,
+    scope: row.scope,
+    category: row.category,
+  }));
 }
 
+type RawPendingRule = {
+  id: number;
+  run_id: string | null;
+  lesson_id: number | null;
+  rule_text: string;
+  scope: string;
+  status: string;
+  created_at: string | null;
+};
+
 export async function getPendingRules(config: AutomatorConfig): Promise<PendingRule[]> {
-  const data = await requestJson<unknown>(config, "/rules/pending");
-  return asArray<PendingRule>(data, "rules");
+  const rows = await requestJson<RawPendingRule[]>(config, "/rules/pending");
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: String(row.id),
+    text: row.rule_text,
+    scope: row.scope,
+    source: "import",
+    createdAt: row.created_at ?? null,
+  }));
 }
 
 export async function decideRule(config: AutomatorConfig, id: string, decision: RuleDecision): Promise<unknown> {
@@ -324,6 +407,8 @@ export async function decideRule(config: AutomatorConfig, id: string, decision: 
 }
 
 export async function runDoctor(config: AutomatorConfig, content: string): Promise<DoctorResult> {
+  // Daemon returns { score, findings[{severity: high|medium|low, quote, problem,
+  // suggestedRewrite}], profile }; the extra `profile` field is harmless.
   return requestJson<DoctorResult>(config, "/agentsmd/doctor", { method: "POST", body: JSON.stringify({ content }) });
 }
 

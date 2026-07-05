@@ -113,19 +113,19 @@ export const mockDoctorResult: DoctorResult = {
   score: 62,
   findings: [
     {
-      severity: "warn",
+      severity: "medium",
       quote: "Please make sure to always be very careful and thorough and think hard about everything.",
       problem: "Vague filler with no verifiable action. Rules like this don't change behavior and dilute the file.",
       suggestedRewrite: "Delete. If there's a real constraint, state it concretely (e.g. \"run `npm run typecheck` before finishing\").",
     },
     {
-      severity: "info",
+      severity: "low",
       quote: "Be concise.",
       problem: "Duplicated intent with other style guidance; also unmeasurable.",
       suggestedRewrite: "Merge into a single style rule with concrete limits.",
     },
     {
-      severity: "error",
+      severity: "high",
       quote: "Use TypeScript.  /  Never use `any`.",
       problem: "Two rules that belong together and one restates the language default. Consolidate.",
       suggestedRewrite: "Write TypeScript with no `any`; prefer explicit types at module boundaries.",

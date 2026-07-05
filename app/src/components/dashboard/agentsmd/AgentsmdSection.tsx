@@ -142,9 +142,9 @@ function ScoreBadge({ score }: { score: number }) {
 }
 
 const SEVERITY_COLOR: Record<string, string> = {
-  error: "var(--ctp-red)",
-  warn: "var(--ctp-peach)",
-  info: "var(--ctp-blue)",
+  high: "var(--ctp-red)",
+  medium: "var(--ctp-peach)",
+  low: "var(--ctp-blue)",
 };
 
 function FindingRow({ finding }: { finding: DoctorFinding }) {
