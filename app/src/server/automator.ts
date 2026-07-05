@@ -389,6 +389,10 @@ type RawPendingRule = {
   scope: string;
   status: string;
   created_at: string | null;
+  // Provenance joined from the lesson + candidate (null when unlinked).
+  category: string | null;
+  project: string | null;
+  from_message: string | null;
 };
 
 export async function getPendingRules(config: AutomatorConfig): Promise<PendingRule[]> {
@@ -397,7 +401,10 @@ export async function getPendingRules(config: AutomatorConfig): Promise<PendingR
     id: String(row.id),
     text: row.rule_text,
     scope: row.scope,
+    category: row.category ?? null,
+    project: row.project ?? null,
     source: "import",
+    fromMessage: row.from_message ?? null,
     createdAt: row.created_at ?? null,
   }));
 }
