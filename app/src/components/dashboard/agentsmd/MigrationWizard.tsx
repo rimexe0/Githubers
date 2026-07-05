@@ -4,7 +4,9 @@ import { AlertTriangle, Check, Loader2, Play } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import type { ImportStatus } from "@/server/automator";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import type { DaemonConfig, ImportStatus } from "@/server/automator";
 import { api } from "../utils";
 import { mockImportStatus } from "./mocks";
 import { ReceiptsBrowser } from "./ReceiptsBrowser";
@@ -60,6 +62,9 @@ function ImportStep({ enabled, onDone }: { enabled: boolean; onDone: () => void 
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [profiles, setProfiles] = useState<string[]>([]);
+  const [reviewer, setReviewer] = useState<string>("");
+  const [synthesizer, setSynthesizer] = useState<string>("");
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const poll = useCallback(async () => {
@@ -105,11 +110,26 @@ function ImportStep({ enabled, onDone }: { enabled: boolean; onDone: () => void 
     if (isRunning(status)) startPolling();
   }, [status, startPolling]);
 
+  // Load the daemon's profile list to seed the reviewer/synthesizer selectors.
+  useEffect(() => {
+    if (!enabled) return;
+    void api<DaemonConfig>("/api/automator/config")
+      .then((cfg) => {
+        setProfiles(cfg.profiles ?? []);
+        setReviewer((prev) => prev || cfg.importReviewerProfile || "");
+        setSynthesizer((prev) => prev || cfg.importSynthesizerProfile || "");
+      })
+      .catch(() => {
+        /* selectors stay empty → daemon defaults are used */
+      });
+  }, [enabled]);
+
   const start = async () => {
     setStarting(true);
     setError(null);
     try {
-      const next = await api<ImportStatus>("/api/automator/import-chats", { method: "POST" });
+      const body = JSON.stringify({ reviewerProfile: reviewer || undefined, synthesizerProfile: synthesizer || undefined });
+      const next = await api<ImportStatus>("/api/automator/import-chats", { method: "POST", body });
       setStatus(next);
       setOffline(false);
       startPolling();
@@ -143,6 +163,13 @@ function ImportStep({ enabled, onDone }: { enabled: boolean; onDone: () => void 
         Mines your local Claude Code and Codex transcripts for frustration moments, reviews them, and synthesizes candidate rules. Mining takes seconds;
         the review pass takes minutes. You can close this panel — the import keeps running on the daemon.
       </p>
+
+      {profiles.length > 0 && (
+        <div className="flex flex-wrap items-end gap-3">
+          <ProfilePicker label="Reviewer model" value={reviewer} onChange={setReviewer} profiles={profiles} disabled={running} />
+          <ProfilePicker label="Synthesizer model" value={synthesizer} onChange={setSynthesizer} profiles={profiles} disabled={running} />
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <Button type="button" size="sm" disabled={starting || running} onClick={start}>
@@ -230,6 +257,26 @@ function PhaseTracker({ status }: { status: ImportStatus }) {
 
       {status.message && <p className="text-[0.65rem] text-muted-foreground">{status.message}</p>}
       {status.error && <p className="text-[0.65rem] text-destructive">{status.error}</p>}
+    </div>
+  );
+}
+
+function ProfilePicker({ label, value, onChange, profiles, disabled }: { label: string; value: string; onChange: (value: string) => void; profiles: string[]; disabled?: boolean }) {
+  return (
+    <div className="grid gap-1">
+      <Label className="text-[0.65rem] text-muted-foreground">{label}</Label>
+      <Select value={value} onValueChange={onChange} disabled={disabled}>
+        <SelectTrigger size="sm" className="h-7 text-xs">
+          <SelectValue placeholder="daemon default" />
+        </SelectTrigger>
+        <SelectContent>
+          {profiles.map((profile) => (
+            <SelectItem key={profile} value={profile}>
+              {profile}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

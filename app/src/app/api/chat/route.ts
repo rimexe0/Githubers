@@ -12,9 +12,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as { repo?: string; model?: string };
+    const body = (await request.json()) as { repo?: string; model?: string; profile?: string };
     if (!body.repo) return badRequest("repo is required");
-    return ok(await createConversation(body.repo, body.model ?? null));
+    return ok(await createConversation(body.repo, body.model ?? null, body.profile ?? null));
   } catch (error) {
     return serverError(error);
   }

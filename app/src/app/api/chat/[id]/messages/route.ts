@@ -9,7 +9,7 @@ import { appendMessage, getConversation, touchConversation, type ThinkingEvent }
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
-    const body = (await request.json()) as { content?: string; model?: string };
+    const body = (await request.json()) as { content?: string; model?: string; profile?: string };
     const content = typeof body.content === "string" ? body.content.trim() : "";
     if (!content) return badRequest("content is required");
 
@@ -23,22 +23,23 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
 
     const model = body.model ?? existing.conversation.model ?? undefined;
+    const profile = body.profile ?? existing.conversation.profile ?? undefined;
     const isFirstTurn = existing.messages.length === 0;
     await appendMessage(id, "user", content);
     const history = [...existing.messages.map((m) => ({ role: m.role, content: m.content })), { role: "user" as const, content }];
 
     let daemonResponse: Response;
     try {
-      daemonResponse = await openChatStream(config, { repoPath, messages: history, model });
+      daemonResponse = await openChatStream(config, { repoPath, messages: history, model, profile });
     } catch (error) {
       const { message, status } = automatorErrorInfo(error);
-      await touchConversation(id, model ?? null, isFirstTurn ? content : null);
+      await touchConversation(id, model ?? null, isFirstTurn ? content : null, profile ?? null);
       return jsonError(message, status);
     }
 
     const upstream = daemonResponse.body;
     if (!upstream) {
-      await touchConversation(id, model ?? null, isFirstTurn ? content : null);
+      await touchConversation(id, model ?? null, isFirstTurn ? content : null, profile ?? null);
       return jsonError("No stream from automator daemon", 502);
     }
 
@@ -53,7 +54,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         const { done, value } = await reader.read();
         if (done) {
           if (finalReply.trim()) await appendMessage(id, "assistant", finalReply, finalThinking);
-          await touchConversation(id, model ?? null, isFirstTurn ? content : null);
+          await touchConversation(id, model ?? null, isFirstTurn ? content : null, profile ?? null);
           controller.close();
           return;
         }

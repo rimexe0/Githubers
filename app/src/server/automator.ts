@@ -177,15 +177,16 @@ export type ThinkingEvent =
 
 export async function chatWithRepo(
   config: AutomatorConfig,
-  body: { repoPath: string; messages: ChatMessage[]; model?: string },
+  body: { repoPath: string; messages: ChatMessage[]; model?: string; profile?: string },
 ): Promise<{ reply: string; thinking?: ThinkingEvent[]; profile: string }> {
   return requestJson(config, "/chat", { method: "POST", body: JSON.stringify(body) });
 }
 
 // Returns the raw streaming Response (NDJSON body) so the caller can relay it.
+// `profile` selects the agent backend (opencode-plan | claude | codex | …).
 export async function openChatStream(
   config: AutomatorConfig,
-  body: { repoPath: string; messages: ChatMessage[]; model?: string },
+  body: { repoPath: string; messages: ChatMessage[]; model?: string; profile?: string },
 ): Promise<Response> {
   return request(config, "/chat/stream", { method: "POST", body: JSON.stringify(body) });
 }
@@ -325,9 +326,34 @@ function normalizeStatus(raw: RawImportEnvelope): ImportStatus {
   };
 }
 
-export async function startImport(config: AutomatorConfig): Promise<ImportStatus> {
-  const raw = await requestJson<RawImportEnvelope>(config, "/import-chats", { method: "POST", body: "{}" });
+export type ImportParams = { reviewerProfile?: string; synthesizerProfile?: string; maxCandidates?: number };
+
+export async function startImport(config: AutomatorConfig, params: ImportParams = {}): Promise<ImportStatus> {
+  const raw = await requestJson<RawImportEnvelope>(config, "/import-chats", { method: "POST", body: JSON.stringify(params) });
   return normalizeStatus(raw);
+}
+
+export type DaemonConfig = {
+  profiles: string[];
+  defaultBuilderProfile: string;
+  defaultReviewerProfile: string;
+  importReviewerProfile: string;
+  importSynthesizerProfile: string;
+};
+
+export async function getDaemonConfig(config: AutomatorConfig): Promise<DaemonConfig> {
+  return requestJson<DaemonConfig>(config, "/config");
+}
+
+export type AgentsmdFile = { scope: "project" | "global"; tool: "agents" | "claude" | "codex"; path: string; exists: boolean; content: string };
+
+// Resolve a mapped repo (owner/repo) to its local clone path, then have the
+// daemon read AGENTS.md/CLAUDE.md from there + the global locations.
+export async function getAgentsmdFiles(config: AutomatorConfig, repo?: string): Promise<AgentsmdFile[]> {
+  const repoPath = repo ? config.repoPaths.get(repo) : undefined;
+  const qs = repoPath ? `?repoPath=${encodeURIComponent(repoPath)}` : "";
+  const data = await requestJson<{ files: AgentsmdFile[] }>(config, `/agentsmd/files${qs}`);
+  return Array.isArray(data?.files) ? data.files : [];
 }
 
 export async function getImportStatus(config: AutomatorConfig): Promise<ImportStatus> {
@@ -413,10 +439,12 @@ export async function decideRule(config: AutomatorConfig, id: string, decision: 
   return requestJson(config, `/rules/${encodeURIComponent(id)}/decide`, { method: "POST", body: JSON.stringify(decision) });
 }
 
-export async function runDoctor(config: AutomatorConfig, content: string): Promise<DoctorResult> {
+export async function runDoctor(config: AutomatorConfig, content: string, profile?: string): Promise<DoctorResult> {
   // Daemon returns { score, findings[{severity: high|medium|low, quote, problem,
   // suggestedRewrite}], profile }; the extra `profile` field is harmless.
-  return requestJson<DoctorResult>(config, "/agentsmd/doctor", { method: "POST", body: JSON.stringify({ content }) });
+  const body: { content: string; profile?: string } = { content };
+  if (profile) body.profile = profile;
+  return requestJson<DoctorResult>(config, "/agentsmd/doctor", { method: "POST", body: JSON.stringify(body) });
 }
 
 // --- Trigger -----------------------------------------------------------------
