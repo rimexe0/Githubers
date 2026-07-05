@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { AgentsmdSection } from "./agentsmd/AgentsmdSection";
 import type { Settings } from "./types";
 import { api } from "./utils";
 
@@ -64,6 +65,7 @@ export function SettingsForm({ settings, setSettings, refresh, setMessage }: { s
             <Switch id="automator-enabled" checked={settings.automatorEnabled} onCheckedChange={(value) => update("automatorEnabled", value)} />
           </div>
           <Field label="Daemon base URL" value={settings.automatorBaseUrl} onChange={(value) => update("automatorBaseUrl", value)} />
+          <Field label="Daemon WS URL (ts.net)" value={settings.automatorWsUrl} onChange={(value) => update("automatorWsUrl", value)} placeholder="wss://your-host.ts.net/ws" />
           <Field label="Daemon token" type="password" value={settings.automatorToken} onChange={(value) => update("automatorToken", value)} />
           <div className="grid gap-1.5">
             <Label>Repo → local clone path (one per line)</Label>
@@ -86,15 +88,17 @@ export function SettingsForm({ settings, setSettings, refresh, setMessage }: { s
           <Button type="button" variant="secondary" size="sm" onClick={() => api<{ runCount: number }>("/api/automator/health", { method: "POST" }).then((result) => setMessage(`Automator OK (${result.runCount} run${result.runCount === 1 ? "" : "s"})`)).catch((error) => setMessage(error.message))}>Test daemon</Button>
         </div>
       </div>
+
+      <AgentsmdSection settings={settings} />
     </div>
   );
 }
 
-function Field({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
+function Field({ label, value, onChange, type = "text", placeholder }: { label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string }) {
   return (
     <div className="grid gap-1.5">
       <Label>{label}</Label>
-      <Input type={type} value={value} onChange={(event) => onChange(event.target.value)} />
+      <Input type={type} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
     </div>
   );
 }

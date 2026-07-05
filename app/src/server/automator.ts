@@ -197,6 +197,136 @@ export async function listModels(config: AutomatorConfig): Promise<AutomatorMode
   return data.models ?? [];
 }
 
+// --- Chat-history migration + AGENTS.md doctor (AgentAutomator#6) -------------
+//
+// The daemon mines local Claude Code + Codex transcripts for frustration moments
+// (receipts) and synthesizes learned rules that feed the #4 pending queue. These
+// endpoints are only meaningful when the daemon runs local to the transcript
+// files; every one degrades to a clear offline state in the UI when unreachable.
+//
+// Privacy: receipts carry verbatim quotes from work chats. This layer only
+// relays them to the browser — it never persists or logs message bodies.
+
+export type ImportSource = "claude" | "codex" | (string & {});
+
+export type ImportStats = {
+  sessionsScanned?: number;
+  candidatesFound?: number;
+  lessonsSynthesized?: number;
+  batchIndex?: number;
+  batchTotal?: number;
+};
+
+export type ImportPhase = "idle" | "mining" | "reviewing" | "synthesizing" | "done" | "error" | (string & {});
+
+export type ImportStatus = {
+  active: boolean;
+  phase: ImportPhase;
+  stats: ImportStats;
+  rateLimitedUntil?: string | null;
+  message?: string | null;
+  error?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+};
+
+export type ImportCandidate = {
+  id?: string;
+  source: ImportSource;
+  project: string;
+  timestamp: string;
+  score: number;
+  signals: string[];
+  userMessage: string;
+  assistantBefore: string;
+};
+
+export type ImportLesson = {
+  id?: string;
+  candidateId?: string;
+  rule: string;
+  scope: "global" | "project" | (string & {});
+  category: string;
+  // Provenance echoed back so a receipt can be matched to its lesson client-side.
+  source?: string;
+  project?: string;
+  timestamp?: string;
+  userMessage?: string;
+};
+
+export type PendingRule = {
+  id: string;
+  text: string;
+  scope: "global" | "project" | (string & {});
+  category?: string | null;
+  project?: string | null;
+  source?: string | null; // "import" | "capture" | ...
+  fromMessage?: string | null; // the original user message that earned the rule
+  createdAt?: string | null;
+};
+
+export type RuleDecision = { status: "approved" | "rejected"; editedText?: string };
+
+export type DoctorFinding = {
+  severity: "info" | "warn" | "error" | (string & {});
+  quote: string;
+  problem: string;
+  suggestedRewrite: string;
+};
+
+export type DoctorResult = {
+  score: number;
+  findings: DoctorFinding[];
+};
+
+// The daemon may return a bare array or wrap it in a named key; accept both.
+function asArray<T>(data: unknown, key: string): T[] {
+  if (Array.isArray(data)) return data as T[];
+  if (data && typeof data === "object" && Array.isArray((data as Record<string, unknown>)[key])) {
+    return (data as Record<string, T[]>)[key];
+  }
+  return [];
+}
+
+export async function startImport(config: AutomatorConfig): Promise<ImportStatus> {
+  return requestJson<ImportStatus>(config, "/import-chats", { method: "POST", body: "{}" });
+}
+
+export async function getImportStatus(config: AutomatorConfig): Promise<ImportStatus> {
+  return requestJson<ImportStatus>(config, "/import-chats");
+}
+
+export async function getImportCandidates(
+  config: AutomatorConfig,
+  params: { project?: string; signal?: string; source?: string } = {},
+): Promise<ImportCandidate[]> {
+  const search = new URLSearchParams();
+  if (params.project) search.set("project", params.project);
+  if (params.signal) search.set("signal", params.signal);
+  if (params.source) search.set("source", params.source);
+  const qs = search.toString();
+  const data = await requestJson<unknown>(config, `/import-chats/candidates${qs ? `?${qs}` : ""}`);
+  return asArray<ImportCandidate>(data, "candidates");
+}
+
+export async function getImportLessons(config: AutomatorConfig): Promise<ImportLesson[]> {
+  const data = await requestJson<unknown>(config, "/import-chats/lessons");
+  return asArray<ImportLesson>(data, "lessons");
+}
+
+export async function getPendingRules(config: AutomatorConfig): Promise<PendingRule[]> {
+  const data = await requestJson<unknown>(config, "/rules/pending");
+  return asArray<PendingRule>(data, "rules");
+}
+
+export async function decideRule(config: AutomatorConfig, id: string, decision: RuleDecision): Promise<unknown> {
+  return requestJson(config, `/rules/${encodeURIComponent(id)}/decide`, { method: "POST", body: JSON.stringify(decision) });
+}
+
+export async function runDoctor(config: AutomatorConfig, content: string): Promise<DoctorResult> {
+  return requestJson<DoctorResult>(config, "/agentsmd/doctor", { method: "POST", body: JSON.stringify({ content }) });
+}
+
 // --- Trigger -----------------------------------------------------------------
 
 type ItemRaw = {
