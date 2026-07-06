@@ -23,7 +23,7 @@ export function MigrationWizard({ open, onOpenChange, enabled, agentsmd }: { ope
       <DialogContent className="flex h-[82vh] w-full flex-col gap-3 sm:max-w-4xl" showCloseButton>
         <DialogHeader>
           <DialogTitle>Migrate from chat history</DialogTitle>
-          <div className="flex items-center gap-1 pt-1">
+          <div className="flex items-center gap-1 overflow-x-auto pt-1">
             {STEPS.map((label, index) => (
               <button
                 key={label}

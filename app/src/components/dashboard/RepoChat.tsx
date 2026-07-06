@@ -2,6 +2,7 @@
 
 import { ChevronDown, ChevronRight, FolderGit2, MessageSquarePlus, Plus, Trash2, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { Button } from "@/components/ui/button";
 import { ChatWindow, type Conversation, DEFAULT_MODEL, type Model } from "./ChatWindow";
 import {
@@ -69,6 +70,7 @@ function regionStyle(dir: Dir): React.CSSProperties {
 
 export function RepoChat({ settings }: { settings: Settings }) {
   const enabled = settings.automatorEnabled;
+  const isDesktop = useIsDesktop();
   const [repos, setRepos] = useState<string[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [profiles, setProfiles] = useState<string[]>([]);
@@ -453,6 +455,29 @@ export function RepoChat({ settings }: { settings: Settings }) {
       </aside>
 
       <div className="flex min-h-0 flex-1 flex-col gap-1">
+        {/* Mobile chat access — the repo/conversation sidebar is hidden on phones. */}
+        <details className="group/mchats relative shrink-0 md:hidden">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+            <FolderGit2 className="size-3.5 text-muted-foreground" />
+            <span className="font-semibold">Chats &amp; repos</span>
+            {repos[0] && (
+              <Button
+                type="button"
+                size="xs"
+                variant="secondary"
+                className="ml-auto"
+                onClick={(event) => {
+                  event.preventDefault();
+                  newChatTab(repos[0]);
+                }}
+              >
+                <Plus className="size-3" /> New
+              </Button>
+            )}
+            <ChevronDown className="size-3.5 text-muted-foreground transition-transform group-open/mchats:rotate-180" />
+          </summary>
+          <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-[60vh] overflow-y-auto rounded-md border border-border bg-card p-1 shadow-md">{tree}</div>
+        </details>
         {error && <div className="shrink-0 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">{error}</div>}
         {layout.length === 0 ? (
           <div
@@ -463,13 +488,17 @@ export function RepoChat({ settings }: { settings: Settings }) {
             No open chats. Pick a conversation from the tree, drag one here, or start a new chat.
           </div>
         ) : (
-          <div className="flex min-h-0 flex-1 gap-1 overflow-x-auto pb-1" onDragEnd={clearDrag}>
+          <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pb-1 md:flex-row md:overflow-x-auto md:overflow-y-hidden" onDragEnd={clearDrag}>
             {layout.map((lane, laneIndex, lanesArr) => {
               const sig = lane.join(",");
-              const laneStyle: React.CSSProperties = { flex: `1 1 ${laneBasis[sig] ?? DEFAULT_BASIS}px`, minWidth: 260 };
+              // Desktop: side-by-side resizable columns. Mobile: full-width lanes
+              // stacked vertically with a tall min-height, scrolling down the page.
+              const laneStyle: React.CSSProperties = isDesktop
+                ? { flex: `1 1 ${laneBasis[sig] ?? DEFAULT_BASIS}px`, minWidth: 260 }
+                : { minHeight: "78vh" };
               return (
                 <Fragment key={sig || laneIndex}>
-                  <div className="flex h-full min-w-0 flex-col gap-1" style={laneStyle}>
+                  <div className="flex min-w-0 flex-col gap-1 md:h-full" style={laneStyle}>
                     {lane.map((groupId, groupIndex) => {
                       const group = groups[groupId];
                       if (!group) return null;
@@ -509,12 +538,12 @@ export function RepoChat({ settings }: { settings: Settings }) {
                               onActivity={loadConversations}
                             />
                           </div>
-                          {!dragging && !isLast && <ResizeHandle axis="y" onResize={(value) => setGroupSize(groupId, value)} />}
+                          {!dragging && !isLast && isDesktop && <ResizeHandle axis="y" onResize={(value) => setGroupSize(groupId, value)} />}
                         </Fragment>
                       );
                     })}
                   </div>
-                  {!dragging && laneIndex < lanesArr.length - 1 && (
+                  {!dragging && isDesktop && laneIndex < lanesArr.length - 1 && (
                     <ResizeHandle axis="x" getStart={() => laneBasis[sig] ?? DEFAULT_BASIS} onResize={(value) => setLaneBasisFor(sig, value)} />
                   )}
                 </Fragment>
