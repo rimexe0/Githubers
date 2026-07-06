@@ -451,16 +451,16 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
           {project.owner_type}/{project.owner_login} #{project.project_number}
           {board?.lastSyncedAt ? ` · synced ${relativeTime(board.lastSyncedAt)} ago` : ""}
         </span>
-        <div className="relative ml-auto flex items-center">
+        <div className="relative flex w-full items-center sm:ml-auto sm:w-auto">
           <Search className="pointer-events-none absolute left-2 size-3 text-muted-foreground" />
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Search #42, title, author, label, state…"
-            className="h-7 w-64 pl-7 text-xs"
+            className="h-7 w-full pl-7 text-xs sm:w-64"
           />
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           {board && allUsers.length > 0 && (
             <Popover>
               <PopoverTrigger asChild>
@@ -532,11 +532,11 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
       {error && <div className="shrink-0 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">{error}</div>}
 
       {!isDesktop ? (
-        // Mobile: no tiling/resize/drag — every pane full-width, expanded, stacked
-        // vertically so cards fit the screen and the page scrolls down.
-        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-2">
+        // Mobile: no tiling/resize/drag, but keep the horizontal kanban — each pane
+        // is a wide full-height column you swipe between, scrolling vertically inside.
+        <div className="flex min-h-0 flex-1 gap-2 overflow-x-auto pb-2 [-webkit-overflow-scrolling:touch]">
           {(effectiveLayout ?? []).flat().map((paneId) => (
-            <div key={paneId} className="flex flex-col" style={{ minHeight: paneId === "activity" ? undefined : "60vh" }}>
+            <div key={paneId} className="flex h-full w-[85vw] max-w-xs shrink-0 flex-col">
               <Pane
                 meta={paneMeta(paneId)}
                 count={paneCount(paneId)}
