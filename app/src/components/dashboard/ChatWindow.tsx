@@ -240,7 +240,7 @@ export function ChatWindow({
   const isOpencodeProfile = !profile || profile.startsWith("opencode");
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-1.5">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-1.5">
       <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-0.5">
         {isOpencodeProfile ? (
           <span className="flex shrink-0 items-center gap-1 text-[0.6rem] text-[var(--ctp-green)]" title="The agent can read and search the repo but cannot modify it.">
@@ -251,43 +251,43 @@ export function ChatWindow({
             <Lock className="size-3" /> full agent · can edit
           </span>
         )}
-        {profiles.length > 0 && (
-          <Select value={profile || PLAN_PROFILE} onValueChange={(value) => onProfileChange(value === PLAN_PROFILE ? "" : value)}>
-            <SelectTrigger size="sm" className="ml-auto h-6 w-auto text-[0.7rem]" aria-label="Backend">
-              <SelectValue placeholder="Backend" />
+        {/* Selectors: own full-width row on mobile (each shrinks + truncates), pushed
+            right at natural width on desktop. */}
+        <div className="flex w-full min-w-0 items-center gap-1.5 md:ml-auto md:w-auto">
+          {profiles.length > 0 && (
+            <Select value={profile || PLAN_PROFILE} onValueChange={(value) => onProfileChange(value === PLAN_PROFILE ? "" : value)}>
+              <SelectTrigger size="sm" className="h-6 min-w-0 flex-1 text-[0.7rem] md:w-auto md:flex-none" aria-label="Backend">
+                <SelectValue placeholder="Backend" />
+              </SelectTrigger>
+              <SelectContent>
+                {profiles.map((entry) => (
+                  <SelectItem key={entry} value={entry} className="text-xs">
+                    {entry}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Select value={model || DEFAULT_MODEL} onValueChange={onModelChange} disabled={!isOpencodeProfile}>
+            <SelectTrigger size="sm" className="h-6 min-w-0 flex-1 text-[0.7rem] md:w-52 md:flex-none" aria-label="Model">
+              <SelectValue placeholder="Model" />
             </SelectTrigger>
             <SelectContent>
-              {profiles.map((entry) => (
-                <SelectItem key={entry} value={entry} className="text-xs">
-                  {entry}
-                </SelectItem>
+              <SelectItem value={DEFAULT_MODEL} className="text-xs">Default (plan profile)</SelectItem>
+              {providerGroups.map(([provider, providerModels]) => (
+                <SelectGroup key={provider}>
+                  <SelectLabel className="text-[0.6rem] capitalize">{provider}</SelectLabel>
+                  {providerModels.map((entry) => (
+                    <SelectItem key={entry.id} value={entry.id} className="text-xs">
+                      {modelLabel(entry.id)}
+                      {entry.free && <span className="text-[var(--ctp-green)]"> · free</span>}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
               ))}
             </SelectContent>
           </Select>
-        )}
-        <Select value={model || DEFAULT_MODEL} onValueChange={onModelChange} disabled={!isOpencodeProfile}>
-          <SelectTrigger
-            size="sm"
-            className={`h-6 w-full min-w-0 flex-1 text-[0.7rem] md:w-52 md:flex-none ${profiles.length ? "" : "ml-auto"}`}
-            aria-label="Model"
-          >
-            <SelectValue placeholder="Model" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={DEFAULT_MODEL} className="text-xs">Default (plan profile)</SelectItem>
-            {providerGroups.map(([provider, providerModels]) => (
-              <SelectGroup key={provider}>
-                <SelectLabel className="text-[0.6rem] capitalize">{provider}</SelectLabel>
-                {providerModels.map((entry) => (
-                  <SelectItem key={entry.id} value={entry.id} className="text-xs">
-                    {modelLabel(entry.id)}
-                    {entry.free && <span className="text-[var(--ctp-green)]"> · free</span>}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            ))}
-          </SelectContent>
-        </Select>
+        </div>
       </div>
       {models.find((entry) => entry.id === model)?.free && (
         <div className="shrink-0 px-0.5 text-[0.55rem] text-[var(--ctp-yellow)]">Free models can be slow or hit their usage limit — the request stops itself if it stalls.</div>
@@ -306,7 +306,7 @@ export function ChatWindow({
             )}
             {(message.content || message.role === "user" || !message.streaming) && (
               <div
-                className={`max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-xs leading-relaxed ${
+                className={`max-w-[85%] whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-xs leading-relaxed ${
                   message.role === "user"
                     ? "bg-[var(--ctp-blue)] text-[var(--ctp-base)]"
                     : message.failed

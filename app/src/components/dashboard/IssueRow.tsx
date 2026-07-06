@@ -7,9 +7,9 @@ export function IssueRow({ issue, runState }: { issue: OpenIssue; runState?: str
   const run = runState ? runStateMeta(runState) : null;
   return (
     <div className="rounded-md bg-card px-2 py-1 text-xs transition-colors hover:bg-accent">
-      <div className="flex items-baseline gap-1.5">
+      <div className="flex min-w-0 items-baseline gap-1.5">
         <span className="shrink-0 text-muted-foreground tabular-nums">{issue.repository.split("/")[1]}#{issue.number}</span>
-        <a className="truncate" href={issue.url} target="_blank" rel="noreferrer">{issue.title}</a>
+        <a className="min-w-0 flex-1 truncate" href={issue.url} target="_blank" rel="noreferrer">{issue.title}</a>
       </div>
       <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[0.65rem] text-muted-foreground">
         {issue.labels.map((label) => (

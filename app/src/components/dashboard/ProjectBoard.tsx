@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -23,6 +24,7 @@ import { Switch } from "@/components/ui/switch";
 import { Activity } from "./Activity";
 import { IssueRow } from "./IssueRow";
 import { PullRequestRow } from "./PullRequestRow";
+import { LaneGap, type LaneLayout, loadSizeMap, moveInLayout, moveToNewLane, PaneDrop, persist, ResizeHandle } from "./tiling";
 import type { AutomatorRun, BoardData, BoardItem, Project } from "./types";
 import { api, columnAccent, projectLabel, relativeTime, runStateMeta, stateClass } from "./utils";
 
@@ -122,7 +124,6 @@ function matchesSearch(query: string, item: Searchable): boolean {
 // columns plus the fixed Issues / PRs / Activity panes, all rearrangeable.
 
 const FIXED_PANES = ["issues", "prs", "activity"];
-type LaneLayout = string[][];
 
 const layoutKey = (projectId: string) => `board-layout-${projectId}`;
 
@@ -137,24 +138,6 @@ function loadStoredLayout(projectId: string): LaneLayout | null {
     return raw ? (JSON.parse(raw) as LaneLayout) : null;
   } catch {
     return null;
-  }
-}
-
-function loadSizeMap(key: string): Record<string, number> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as Record<string, number>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function persist(key: string, value: unknown) {
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    /* ignore quota/availability errors */
   }
 }
 
@@ -173,6 +156,7 @@ function reconcileLayout(prev: LaneLayout | null, columnNames: string[]): LaneLa
 }
 
 export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { project: Project; refreshKey: number; onEdit: () => void; onDelete: () => Promise<void> }) {
+  const isDesktop = useIsDesktop();
   const [boardState, dispatchBoard] = useReducer(projectBoardReducer, initialProjectBoardState);
   const { board, error, fetchId, showClosedPrs, selectedIssueRepo } = boardState;
   const prSwitchId = `pr-state-switch-${project.id}`;
@@ -335,35 +319,15 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
   const visiblePrs = (showClosedPrs ? board?.pullRequests.closed : board?.pullRequests.open)?.filter(visible) ?? [];
 
   // --- pane drag/move ---
-  const locate = (lanes: LaneLayout, id: string): [number, number] => {
-    for (let i = 0; i < lanes.length; i += 1) {
-      const j = lanes[i].indexOf(id);
-      if (j >= 0) return [i, j];
-    }
-    return [-1, -1];
-  };
-
   const movePane = (id: string, toLane: number, toIndex: number) => {
     if (!effectiveLayout) return;
-    const lanes = effectiveLayout.map((lane) => [...lane]);
-    const [fromLane, fromIdx] = locate(lanes, id);
-    if (fromLane < 0) return;
-    lanes[fromLane].splice(fromIdx, 1);
-    let idx = toIndex;
-    if (fromLane === toLane && fromIdx < toIndex) idx -= 1;
-    lanes[toLane].splice(idx, 0, id);
-    setLayout(lanes.filter((lane) => lane.length));
+    setLayout(moveInLayout(effectiveLayout, id, toLane, toIndex));
     setDragId(null);
   };
 
   const movePaneToNewLane = (id: string, laneIndex: number) => {
     if (!effectiveLayout) return;
-    const lanes = effectiveLayout.map((lane) => [...lane]);
-    const [fromLane, fromIdx] = locate(lanes, id);
-    if (fromLane < 0) return;
-    lanes[fromLane].splice(fromIdx, 1);
-    lanes.splice(laneIndex, 0, [id]);
-    setLayout(lanes.filter((lane) => lane.length));
+    setLayout(moveToNewLane(effectiveLayout, id, laneIndex));
     setDragId(null);
   };
 
@@ -567,6 +531,29 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
 
       {error && <div className="shrink-0 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">{error}</div>}
 
+      {!isDesktop ? (
+        // Mobile: no tiling/resize/drag — every pane full-width, expanded, stacked
+        // vertically so cards fit the screen and the page scrolls down.
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-2">
+          {(effectiveLayout ?? []).flat().map((paneId) => (
+            <div key={paneId} className="flex flex-col" style={{ minHeight: paneId === "activity" ? undefined : "60vh" }}>
+              <Pane
+                meta={paneMeta(paneId)}
+                count={paneCount(paneId)}
+                collapsed={false}
+                bar={false}
+                dragging={false}
+                scroll={paneId !== "activity"}
+                onToggle={() => {}}
+                onDragStart={() => {}}
+                headerExtra={paneHeaderExtra(paneId)}
+              >
+                {renderBody(paneId)}
+              </Pane>
+            </div>
+          ))}
+        </div>
+      ) : (
       <div className="flex min-h-0 flex-1 gap-1 overflow-x-auto pb-1" onDragEnd={() => setDragId(null)}>
         {(effectiveLayout ?? []).map((lane, laneIndex, lanesArr) => {
           const sig = lane.join(",");
@@ -632,6 +619,7 @@ export function ProjectBoard({ project, refreshKey, onEdit, onDelete }: { projec
         })}
         {dragId && effectiveLayout && <LaneGap onDrop={() => movePaneToNewLane(dragId, effectiveLayout.length)} />}
       </div>
+      )}
     </div>
   );
 }
@@ -694,83 +682,6 @@ function Pane({
       </div>
       {!collapsed && <div className={`min-h-0 flex-1 ${scroll ? "overflow-y-auto" : "overflow-hidden"}`}>{children}</div>}
     </div>
-  );
-}
-
-// Drop slot between/around panes inside a lane (reorder / restack).
-function PaneDrop({ onDrop, trailing }: { onDrop: () => void; trailing?: boolean }) {
-  const [over, setOver] = useState(false);
-  return (
-    <div
-      onDragOver={(event) => {
-        event.preventDefault();
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(event) => {
-        event.preventDefault();
-        setOver(false);
-        onDrop();
-      }}
-      className={`shrink-0 rounded ${trailing ? "min-h-3 flex-1" : "h-3"} ${over ? "bg-[var(--ctp-blue)]/60" : "bg-[var(--ctp-surface0)]/40"}`}
-    />
-  );
-}
-
-// Pointer-driven resize reporting the new absolute size. For axis y it measures
-// the previous sibling (pane wrapper). For axis x it can't measure (lanes grow
-// to fill, so rendered width != basis), so the caller supplies the start basis
-// via getStart.
-function ResizeHandle({ axis, getStart, onResize }: { axis: "x" | "y"; getStart?: () => number; onResize: (value: number) => void }) {
-  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const startPos = axis === "x" ? event.clientX : event.clientY;
-    let start: number;
-    if (getStart) {
-      start = getStart();
-    } else {
-      const prev = event.currentTarget.previousElementSibling as HTMLElement | null;
-      if (!prev) return;
-      const rect = prev.getBoundingClientRect();
-      start = axis === "x" ? rect.width : rect.height;
-    }
-    const move = (moveEvent: PointerEvent) => onResize(start + ((axis === "x" ? moveEvent.clientX : moveEvent.clientY) - startPos));
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
-  return (
-    <div
-      onPointerDown={onPointerDown}
-      className={
-        axis === "x"
-          ? "w-1 shrink-0 cursor-col-resize self-stretch rounded bg-[var(--ctp-surface0)]/40 hover:bg-[var(--ctp-blue)]"
-          : "h-1 shrink-0 cursor-row-resize rounded bg-[var(--ctp-surface0)]/40 hover:bg-[var(--ctp-blue)]"
-      }
-    />
-  );
-}
-
-// Drop slot between/around lanes (move pane into its own new lane).
-function LaneGap({ onDrop }: { onDrop: () => void }) {
-  const [over, setOver] = useState(false);
-  return (
-    <div
-      onDragOver={(event) => {
-        event.preventDefault();
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(event) => {
-        event.preventDefault();
-        setOver(false);
-        onDrop();
-      }}
-      className={`h-full w-2 shrink-0 self-stretch rounded ${over ? "bg-[var(--ctp-blue)]/60" : "bg-[var(--ctp-surface0)]/40"}`}
-    />
   );
 }
 

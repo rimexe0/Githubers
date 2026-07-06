@@ -1,9 +1,11 @@
 "use client";
 
 import * as Tabs from "@radix-ui/react-tabs";
-import { useEffect, useReducer, useTransition } from "react";
+import { Menu, X } from "lucide-react";
+import { useEffect, useReducer, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { AgentRuns } from "./dashboard/AgentRuns";
+import { Monitor } from "./dashboard/monitor/Monitor";
 import { ProjectBoard } from "./dashboard/ProjectBoard";
 import { RepoChat } from "./dashboard/RepoChat";
 import { ProjectDialog } from "./dashboard/ProjectDialog";
@@ -80,6 +82,7 @@ function dashboardUiReducer(state: DashboardUiState, action: DashboardUiAction):
 export function Dashboard() {
   const [state, dispatch] = useReducer(dashboardReducer, initialDashboardState);
   const [ui, dispatchUi] = useReducer(dashboardUiReducer, initialDashboardUiState);
+  const [navOpen, setNavOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const { settings, projects, syncRuns, summaries, message } = state;
 
@@ -149,14 +152,25 @@ export function Dashboard() {
 
   const changeTab = (value: string) => {
     dispatchUi({ type: "selectTab", value, activeTab });
+    setNavOpen(false);
   };
+
+  const staticTabLabels: Record<string, string> = {
+    chat: "Chat",
+    "agent-runs": "Agent runs",
+    monitor: "Monitor",
+    summaries: "Summaries",
+    settings: "Settings",
+  };
+  const activeProject = projects.find((project) => project.id === activeTab);
+  const activeTabLabel = activeProject ? projectLabel(activeProject) : (staticTabLabels[activeTab] ?? "Menu");
 
   return (
     <main className="h-screen w-full">
       <div className="mx-auto flex h-full w-full max-w-full flex-col">
         <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-card px-3 py-1.5">
           <span className="font-semibold tracking-tight text-[var(--ctp-mauve)]">githubers</span>
-          <span className="text-xs text-muted-foreground">
+          <span className="hidden text-xs text-muted-foreground sm:inline">
             {latestSync ? `last sync ${relativeTime(latestSync.started_at)} ago, ${latestSync.status}` : "no syncs yet"}
           </span>
           <span className="ml-auto truncate text-xs text-muted-foreground">{message}</span>
@@ -198,7 +212,53 @@ export function Dashboard() {
         </header>
 
         <Tabs.Root value={activeTab} onValueChange={changeTab} className="flex min-h-0 flex-1 flex-col">
-          <Tabs.List className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card px-1">
+          {/* Mobile: a menu button + current-view label instead of a scrolling tab strip. */}
+          <div className="relative flex shrink-0 items-center gap-2 border-b border-border bg-card px-2 py-1 md:hidden">
+            <Button type="button" variant="secondary" size="xs" onClick={() => setNavOpen((open) => !open)} aria-label="Menu">
+              {navOpen ? <X className="size-3.5" /> : <Menu className="size-3.5" />}
+            </Button>
+            <span className="truncate text-sm font-semibold">{activeTabLabel}</span>
+            {navOpen && (
+              <>
+                <button type="button" aria-label="Close menu" className="fixed inset-0 z-30 cursor-default bg-black/20" onClick={() => setNavOpen(false)} />
+                <div className="absolute inset-x-0 top-full z-40 max-h-[70vh] overflow-y-auto border-b border-border bg-card p-1 shadow-lg">
+                  {projects.map((project) => (
+                    <button
+                      key={project.id}
+                      type="button"
+                      onClick={() => changeTab(project.id)}
+                      className={`block w-full truncate rounded px-2 py-2 text-left text-sm ${activeTab === project.id ? "bg-accent font-semibold" : "hover:bg-accent/50"}`}
+                    >
+                      {projectLabel(project)}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openAddProject();
+                      setNavOpen(false);
+                    }}
+                    className="block w-full rounded px-2 py-2 text-left text-sm text-muted-foreground hover:bg-accent/50"
+                  >
+                    + project
+                  </button>
+                  <div className="my-1 h-px bg-border" />
+                  {Object.entries(staticTabLabels).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => changeTab(value)}
+                      className={`block w-full rounded px-2 py-2 text-left text-sm ${activeTab === value ? "bg-accent font-semibold" : "hover:bg-accent/50"}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          <Tabs.List className="hidden shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card px-1 md:flex">
             {projects.map((project) => (
               <Tabs.Trigger key={project.id} value={project.id} className="tab-trigger">
                 {projectLabel(project)}
@@ -210,6 +270,7 @@ export function Dashboard() {
             <div className="mx-2 h-4 w-px bg-border" />
             <Tabs.Trigger value="chat" className="tab-trigger">Chat</Tabs.Trigger>
             <Tabs.Trigger value="agent-runs" className="tab-trigger">Agent runs</Tabs.Trigger>
+            <Tabs.Trigger value="monitor" className="tab-trigger">Monitor</Tabs.Trigger>
             <Tabs.Trigger value="summaries" className="tab-trigger">Summaries</Tabs.Trigger>
             <Tabs.Trigger value="settings" className="tab-trigger">Settings</Tabs.Trigger>
           </Tabs.List>
@@ -230,6 +291,9 @@ export function Dashboard() {
           </Tabs.Content>
           <Tabs.Content value="agent-runs" className="panel min-h-0 flex-1 overflow-hidden p-3">
             <AgentRuns settings={settings} />
+          </Tabs.Content>
+          <Tabs.Content value="monitor" className="panel min-h-0 flex-1 overflow-hidden p-3">
+            <Monitor settings={settings} />
           </Tabs.Content>
           <Tabs.Content value="summaries" className="panel min-h-0 flex-1 overflow-y-auto p-3">
             <Summaries summaries={summaries} />

@@ -6,11 +6,11 @@ import { relativeTime, stateClass } from "./utils";
 export function PullRequestRow({ pullRequest }: { pullRequest: BoardPullRequest }) {
   return (
     <div className="rounded-md bg-card px-2 py-1 text-xs transition-colors hover:bg-accent">
-      <div className="flex items-baseline gap-1.5">
+      <div className="flex min-w-0 items-baseline gap-1.5">
         <span className="shrink-0 text-muted-foreground tabular-nums">{pullRequest.repository.split("/")[1]}#{pullRequest.number}</span>
-        <a className="truncate" href={pullRequest.url} target="_blank" rel="noreferrer">{pullRequest.title}</a>
+        <a className="min-w-0 flex-1 truncate" href={pullRequest.url} target="_blank" rel="noreferrer">{pullRequest.title}</a>
       </div>
-      <div className="mt-0.5 flex items-center gap-1.5 text-[0.65rem] text-muted-foreground">
+      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[0.65rem] text-muted-foreground">
         <span className={stateClass(pullRequest.state)}>{pullRequest.state.toLowerCase()}</span>
         {pullRequest.onBoard && <Badge variant="secondary" className="h-4 px-1 text-[0.6rem] text-[var(--ctp-teal)]">board</Badge>}
         {pullRequest.reviewers.length > 0 && (
