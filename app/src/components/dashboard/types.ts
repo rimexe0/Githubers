@@ -22,6 +22,7 @@ export type Settings = {
   webhookSecret: string;
   automatorEnabled: boolean;
   automatorBaseUrl: string;
+  automatorWsUrl: string;
   automatorToken: string;
   automatorRepoPaths: string;
   automatorTriggers: string;
@@ -215,6 +216,7 @@ export const emptySettings: Settings = {
   webhookSecret: "",
   automatorEnabled: false,
   automatorBaseUrl: "http://host.docker.internal:3001/api/v1",
+  automatorWsUrl: "",
   automatorToken: "",
   automatorRepoPaths: "",
   automatorTriggers: "",

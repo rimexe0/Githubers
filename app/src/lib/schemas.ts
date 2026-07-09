@@ -45,6 +45,11 @@ export const settingsSchema = z.object({
   // flat settings form; automator.ts parses them into maps.
   automatorEnabled: z.boolean().optional().default(false),
   automatorBaseUrl: z.string().default("http://host.docker.internal:3001/api/v1"),
+  // Browser→daemon WebSocket URL (the multiplexed monitor channel). Distinct
+  // from automatorBaseUrl: the browser connects directly over the daemon's
+  // Tailscale ts.net name (wss://), while automatorBaseUrl is a server-only
+  // proxy target. Tailnet membership is the auth layer, so no token here.
+  automatorWsUrl: z.string().optional().default(""),
   automatorToken: z.string().optional().default(""),
   automatorRepoPaths: z.string().optional().default(""), // "owner/repo=/local/clone/path" per line
   automatorTriggers: z.string().optional().default(""), // "Column name=supervised|full_auto" per line

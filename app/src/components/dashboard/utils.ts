@@ -19,7 +19,7 @@ export function relativeTime(iso: string) {
   return `${Math.floor(seconds / 86400)}d`;
 }
 
-export const staticTabs = ["chat", "agent-runs", "summaries", "settings"];
+export const staticTabs = ["chat", "agent-runs", "monitor", "summaries", "settings"];
 
 // Colour + grouping for an AgentAutomator run state, reused by the runs panel
 // and the board card badges. Mirrors the daemon state machine in API_CONTRACT.
@@ -54,6 +54,27 @@ export function columnAccent(name: string): string {
   if (n.includes("block")) return "var(--ctp-red)";
   if (n.includes("backlog") || n.includes("todo") || n.includes("to do") || n.includes("triage")) return "var(--ctp-overlay1)";
   return "var(--ctp-lavender)";
+}
+
+// Deterministic Catppuccin accent per repo, so a chat tab's project is legible
+// at a glance even when a tab group mixes repos.
+const REPO_PALETTE = [
+  "var(--ctp-blue)",
+  "var(--ctp-mauve)",
+  "var(--ctp-green)",
+  "var(--ctp-peach)",
+  "var(--ctp-pink)",
+  "var(--ctp-teal)",
+  "var(--ctp-yellow)",
+  "var(--ctp-red)",
+  "var(--ctp-sky)",
+  "var(--ctp-lavender)",
+];
+
+export function repoAccent(repo: string): string {
+  let hash = 0;
+  for (let i = 0; i < repo.length; i += 1) hash = (hash * 31 + repo.charCodeAt(i)) | 0;
+  return REPO_PALETTE[Math.abs(hash) % REPO_PALETTE.length];
 }
 
 export function parseRepos(repos: string) {

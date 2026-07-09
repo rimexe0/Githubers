@@ -260,3 +260,26 @@ a:hover {
     @apply font-sans;
   }
 }
+/* Monitor: activity pulse — a run pane's ring flashes when new output arrives
+   (the element is remounted per output batch so the animation retriggers) and
+   fades to nothing when idle. --pulse-color is set per pane to its status hue. */
+@keyframes monitor-pulse {
+  from {
+    box-shadow: inset 0 0 0 2px var(--pulse-color, var(--ctp-blue));
+    opacity: 0.9;
+  }
+  to {
+    box-shadow: inset 0 0 0 2px transparent;
+    opacity: 0;
+  }
+}
+
+.monitor-pulse {
+  animation: monitor-pulse 1.2s ease-out forwards;
+}
+
+/* xterm fills its host; keep it from overflowing the rounded pane. */
+.xterm,
+.xterm .xterm-viewport {
+  background-color: transparent !important;
+}
