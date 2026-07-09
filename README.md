@@ -133,6 +133,14 @@ From the repo root:
 docker compose config
 ```
 
+End-to-end smoke test, with Githubers and AgentAutomator already running:
+
+```bash
+node tests/smoke.mjs --with-model
+```
+
+See `tests/README.md` for the daemon command and optional environment knobs.
+
 ## Useful Commands
 
 ```bash
