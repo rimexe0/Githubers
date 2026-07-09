@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { query } from "@/db/client";
 import type { AppSettings } from "@/lib/schemas";
+import { deliverSummaryNotifications } from "@/server/notifications";
 import { getSettings } from "@/server/settings";
 
 const execFileAsync = promisify(execFile);
@@ -74,7 +75,10 @@ async function summarizeWithFallbacks(input: SummaryInput, settings: AppSettings
   });
   const errors: string[] = [];
 
-  for (const provider of providers) {
+  async function tryProvider(index: number): Promise<ProviderResult> {
+    const provider = providers[index];
+    if (!provider) throw new Error(`All summary providers failed: ${errors.join("; ")}`);
+
     try {
       if (provider === "lmstudio") return await summarizeWithLmStudio(input, settings);
       if (provider === "codex") return await summarizeWithCommand("codex", settings.codexCommand, input);
@@ -83,9 +87,11 @@ async function summarizeWithFallbacks(input: SummaryInput, settings: AppSettings
     } catch (error) {
       errors.push(`${provider}: ${error instanceof Error ? error.message : "unknown error"}`);
     }
+
+    return tryProvider(index + 1);
   }
 
-  throw new Error(`All summary providers failed: ${errors.join("; ")}`);
+  return tryProvider(0);
 }
 
 export async function runSummary(trigger: "scheduled" | "manual" = "manual") {
@@ -116,10 +122,13 @@ export async function runSummary(trigger: "scheduled" | "manual" = "manual") {
       [runId, result.provider, settings.summaryStyle, "Daily GitHub project summary", result.body, shortBody, changes.rowCount ?? 0, periodStart, periodEnd],
     );
 
+    const summaryId = summary.rows[0].id;
+
     await query("UPDATE changes SET summarized_at = now() WHERE occurred_at >= $1 AND occurred_at <= $2", [periodStart, periodEnd]);
     await query("UPDATE summary_runs SET status = 'success', provider = $2, finished_at = now() WHERE id = $1", [runId, result.provider]);
+    await deliverSummaryNotifications({ id: summaryId, title: "Daily GitHub project summary", body: result.body, shortBody });
 
-    return { id: summary.rows[0].id, provider: result.provider, changeCount: changes.rowCount ?? 0 };
+    return { id: summaryId, provider: result.provider, changeCount: changes.rowCount ?? 0 };
   } catch (error) {
     await query("UPDATE summary_runs SET status = 'failed', finished_at = now(), error = $2 WHERE id = $1", [
       runId,

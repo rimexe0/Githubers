@@ -5,9 +5,10 @@ services:
     environment:
       DATABASE_URL: postgres://githubers:githubers@postgres:5432/githubers
       APP_URL: http://localhost:3000
-      POLL_INTERVAL_MINUTES: 60
+      POLL_INTERVAL_MINUTES: 720
       SUMMARY_CRON: "0 8 * * *"
       SCHEDULER_ENABLED: "true"
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
       CODEX_HOME: /codex-home
       OPENCODE_CONFIG_HOME: /opencode-home
     ports:
@@ -25,8 +26,6 @@ services:
       POSTGRES_USER: githubers
       POSTGRES_PASSWORD: githubers
       POSTGRES_DB: githubers
-    ports:
-      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:

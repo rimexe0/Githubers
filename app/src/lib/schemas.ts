@@ -24,6 +24,7 @@ export const settingsSchema = z.object({
   summaryProviderOrder: z.string().default("lmstudio,codex,opencode,none"),
   summaryStyle: z.string().default("Concise situation summary with what changed, blockers, risks, and next actions."),
   summaryCron: z.string().default("0 8 * * *"),
+  commentPollLimit: z.coerce.number().int().min(1).max(100).default(50),
   lmStudioBaseUrl: z.string().default("http://host.docker.internal:1234/v1"),
   lmStudioModel: z.string().default("local-model"),
   lmStudioTemperature: z.coerce.number().min(0).max(2).default(0.2),
@@ -38,6 +39,20 @@ export const settingsSchema = z.object({
   emailTo: z.string().optional().default(""),
   telegramBotToken: z.string().optional().default(""),
   telegramChatId: z.string().optional().default(""),
+  webhookSecret: z.string().optional().default(""),
+  // AgentAutomator daemon bridge. The repo->path map and trigger columns are
+  // stored as newline text (one "key=value" per line) to match the existing
+  // flat settings form; automator.ts parses them into maps.
+  automatorEnabled: z.boolean().optional().default(false),
+  automatorBaseUrl: z.string().default("http://host.docker.internal:3001/api/v1"),
+  // Browser→daemon WebSocket URL (the multiplexed monitor channel). Distinct
+  // from automatorBaseUrl: the browser connects directly over the daemon's
+  // Tailscale ts.net name (wss://), while automatorBaseUrl is a server-only
+  // proxy target. Tailnet membership is the auth layer, so no token here.
+  automatorWsUrl: z.string().optional().default(""),
+  automatorToken: z.string().optional().default(""),
+  automatorRepoPaths: z.string().optional().default(""), // "owner/repo=/local/clone/path" per line
+  automatorTriggers: z.string().optional().default(""), // "Column name=supervised|full_auto" per line
 });
 
 export type AppSettings = z.infer<typeof settingsSchema>;

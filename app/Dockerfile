@@ -19,8 +19,6 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/src/db/migrations ./src/db/migrations
-COPY --from=builder /app/src/scripts ./src/scripts
-COPY --from=builder /app/package.json ./package.json
-COPY --from=deps /app/node_modules ./node_modules
+COPY --from=builder /app/src/scripts/migrate.mjs ./src/scripts/migrate.mjs
 EXPOSE 3000
-CMD ["sh", "-c", "npm run db:migrate && node server.js"]
+CMD ["sh", "-c", "node src/scripts/migrate.mjs && node server.js"]

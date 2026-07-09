@@ -2,7 +2,7 @@
 
 ## Current Status
 
-Initial Next.js implementation is scaffolded and builds successfully.
+Core local/Tailscale watcher implementation is in place and builds successfully.
 
 ## Progress
 
@@ -11,29 +11,35 @@ Initial Next.js implementation is scaffolded and builds successfully.
 | Planning docs | Complete | `plan.md` and this status tracker created and updated for Next.js. |
 | Docker Compose | Complete | Root Compose runs app and Postgres; config validates. |
 | TypeScript setup | Complete | Created with `npx create-next-app@latest` in `app/`. |
-| Database schema | In progress | Initial Postgres migration added. |
-| Backend API | In progress | Settings, projects, sync, changes, summaries, notification tests added. |
-| Dashboard | In progress | Radix dashboard shell, forms, actions, feeds added. |
-| GitHub polling | In progress | Projects v2 GraphQL polling and item snapshot diffing added. |
-| Summarizers | In progress | LM Studio, Codex, OpenCode, none providers added. |
-| Notifications | In progress | SMTP and Telegram test endpoints added. |
-| Docs | In progress | README quick start added; deeper setup docs still needed. |
+| Database schema | Complete for core | Initial Postgres schema covers settings, projects, repos, snapshots, comments, changes, summaries, and notification deliveries. |
+| Backend API | Complete for core | Settings, projects, sync, changes, summaries, notification tests, health checks, and webhook route added. |
+| Dashboard | Complete for core | Radix dashboard supports project add/edit/delete, settings management, manual sync, manual summary, full summary viewing, notification tests, and provider health tests. |
+| GitHub polling | Complete for core | Projects v2 GraphQL polling, item diffing, issue/PR metadata snapshots, and configurable latest-comment diffing added. |
+| Summarizers | Complete for core | LM Studio, Codex, OpenCode, and none providers added with UI-configurable order. |
+| Notifications | Complete for core | Generated summaries deliver full email and concise Telegram messages when configured. |
+| Docs | In progress | README quick start, LM Studio, Gmail, Telegram, webhook, and verification notes added. |
 
 ## Next Steps
 
-1. Add richer issue/PR comment polling.
-2. Wire daily summary notification delivery.
-3. Add optional webhook receiver.
-4. Add provider/status test endpoints for GitHub and LM Studio.
-5. Expand setup docs for GitHub PAT permissions and deployment.
+1. Add optional historical comment backfill if latest-comment polling is not enough.
+2. Add filters/search for changes and summaries.
+3. Add per-project sync buttons and per-project last-sync status.
+4. Add dashboard auth if the app ever leaves LAN/Tailscale.
+5. Add end-to-end tests with mocked GitHub GraphQL payloads.
 
 ## Verification
 
 - `npm run typecheck` passes in `app/`.
 - `npm run build` passes in `app/`.
 - `docker compose config` passes at repo root.
-- `react-doctor` improved from 65/100 to 76/100 after accessibility/button/dependency fixes.
-- Remaining `react-doctor` warnings are mostly intentional first-pass tradeoffs: sequential project sync, sequential provider fallback, and state that can be refactored later.
+- Full `react-doctor` scan passes at 100/100.
+- Local Docker setup was verified: app and Postgres run, migration applies, dashboard and `/api/health` respond.
+
+## Setup Notes
+
+- Added `app/.dockerignore` after Docker initially sent a huge build context.
+- Production image now uses standalone Next output plus `migrate.mjs`, avoiding copying full `node_modules` into the runner image.
+- Postgres host port mapping was removed because local port `5432` was already allocated; the app connects to Postgres through the Compose network.
 
 ## Decisions
 

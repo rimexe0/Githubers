@@ -1,155 +1,285 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
+/* App follows the system theme via prefers-color-scheme (no .dark class),
+   so make shadcn's dark: utilities respond to the media query too. */
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+/* Catppuccin Latte (light) / Frappé (dark), follows the system theme */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+  color-scheme: light;
+  --ctp-crust: #dce0e8;
+  --ctp-mantle: #e6e9ef;
+  --ctp-base: #eff1f5;
+  --ctp-surface0: #ccd0da;
+  --ctp-surface1: #bcc0cc;
+  --ctp-surface2: #acb0be;
+  --ctp-overlay0: #9ca0b0;
+  --ctp-overlay1: #8c8fa1;
+  --ctp-subtext0: #6c6f85;
+  --ctp-subtext1: #5c5f77;
+  --ctp-text: #4c4f69;
+  --ctp-lavender: #7287fd;
+  --ctp-blue: #1e66f5;
+  --ctp-sapphire: #209fb5;
+  --ctp-teal: #179299;
+  --ctp-green: #40a02b;
+  --ctp-yellow: #df8e1d;
+  --ctp-peach: #fe640b;
+  --ctp-maroon: #e64553;
+  --ctp-red: #d20f39;
+  --ctp-mauve: #8839ef;
+  --ctp-pink: #ea76cb;
+  --ctp-scrim: rgba(76, 79, 105, 0.5);
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* shadcn semantic tokens mapped onto Catppuccin. These reference the
+     --ctp-* vars, which the media query below re-points for dark mode, so a
+     single definition here resolves to Latte (light) or Frappé (dark). */
+  --background: var(--ctp-base);
+  --foreground: var(--ctp-text);
+  --card: var(--ctp-mantle);
+  --card-foreground: var(--ctp-text);
+  --popover: var(--ctp-mantle);
+  --popover-foreground: var(--ctp-text);
+  --primary: var(--ctp-blue);
+  --primary-foreground: var(--ctp-crust);
+  --secondary: var(--ctp-surface0);
+  --secondary-foreground: var(--ctp-text);
+  --muted: var(--ctp-mantle);
+  --muted-foreground: var(--ctp-subtext0);
+  --accent: var(--ctp-surface1);
+  --accent-foreground: var(--ctp-text);
+  --destructive: var(--ctp-red);
+  --border: var(--ctp-surface0);
+  --input: var(--ctp-surface0);
+  --ring: var(--ctp-lavender);
+  --chart-1: var(--ctp-blue);
+  --chart-2: var(--ctp-mauve);
+  --chart-3: var(--ctp-teal);
+  --chart-4: var(--ctp-peach);
+  --chart-5: var(--ctp-green);
+  --radius: 0.4rem;
+  --sidebar: var(--ctp-mantle);
+  --sidebar-foreground: var(--ctp-text);
+  --sidebar-primary: var(--ctp-blue);
+  --sidebar-primary-foreground: var(--ctp-crust);
+  --sidebar-accent: var(--ctp-surface0);
+  --sidebar-accent-foreground: var(--ctp-text);
+  --sidebar-border: var(--ctp-surface0);
+  --sidebar-ring: var(--ctp-lavender);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    color-scheme: dark;
+    --ctp-crust: #232634;
+    --ctp-mantle: #292c3c;
+    --ctp-base: #303446;
+    --ctp-surface0: #414559;
+    --ctp-surface1: #51576d;
+    --ctp-surface2: #626880;
+    --ctp-overlay0: #737994;
+    --ctp-overlay1: #838ba7;
+    --ctp-subtext0: #a5adce;
+    --ctp-subtext1: #b5bfe2;
+    --ctp-text: #c6d0f5;
+    --ctp-lavender: #babbf1;
+    --ctp-blue: #8caaee;
+    --ctp-sapphire: #85c1dc;
+    --ctp-teal: #81c8be;
+    --ctp-green: #a6d189;
+    --ctp-yellow: #e5c890;
+    --ctp-peach: #ef9f76;
+    --ctp-maroon: #ea999c;
+    --ctp-red: #e78284;
+    --ctp-mauve: #ca9ee6;
+    --ctp-pink: #f4b8e4;
+    --ctp-scrim: rgba(35, 38, 52, 0.8);
   }
 }
 
+@theme inline {
+  --color-background: var(--ctp-base);
+  --color-foreground: var(--ctp-text);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-geist-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--ctp-crust);
+  color: var(--ctp-text);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-size: 13px;
 }
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
-.button-primary {
-  border-radius: 9999px;
-  background: #67e8f9;
-  color: #082f49;
-  padding: 0.65rem 1rem;
-  font-weight: 700;
-  transition: opacity 150ms ease, transform 150ms ease;
+a {
+  color: var(--ctp-blue);
 }
 
-.button-primary:hover,
-.button-secondary:hover,
-.button-danger:hover {
-  transform: translateY(-1px);
+a:hover {
+  text-decoration: underline;
 }
 
-.button-primary:disabled {
-  cursor: wait;
-  opacity: 0.65;
-}
-
-.button-secondary {
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #e2e8f0;
-  padding: 0.65rem 1rem;
-  font-weight: 700;
-}
-
-.button-danger {
-  border-radius: 9999px;
-  background: rgba(244, 63, 94, 0.16);
-  color: #fecdd3;
-  padding: 0.65rem 1rem;
-  font-weight: 700;
+.panel {
+  background: var(--ctp-base);
 }
 
 .tab-trigger {
-  border-radius: 9999px;
-  color: #94a3b8;
-  padding: 0.65rem 1rem;
-  font-size: 0.9rem;
-  font-weight: 700;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ctp-overlay1);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab-trigger:hover {
+  color: var(--ctp-subtext1);
 }
 
 .tab-trigger[data-state="active"] {
-  background: #e2e8f0;
-  color: #0f172a;
+  color: var(--ctp-text);
+  border-bottom-color: var(--ctp-mauve);
 }
 
-.field-label {
-  color: #cbd5e1;
-  font-size: 0.85rem;
-  font-weight: 700;
+/* Radix keeps forceMount-ed tab panels in the DOM; hide the inactive ones. */
+.tab-content[data-state="inactive"] {
+  display: none;
 }
 
-.input {
-  width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 1rem;
-  background: rgba(15, 23, 42, 0.92);
-  color: #f8fafc;
-  padding: 0.8rem 0.9rem;
-  outline: none;
+.board-column {
+  background: var(--ctp-mantle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 0;
 }
 
-.input:focus {
-  border-color: #67e8f9;
-  box-shadow: 0 0 0 3px rgba(103, 232, 249, 0.15);
+.board-card {
+  background: var(--ctp-base);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 0.1rem);
+  padding: 0.35rem 0.5rem;
+  transition: border-color 120ms ease;
 }
 
-.dialog-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(2, 6, 23, 0.78);
-  backdrop-filter: blur(8px);
+.board-card:hover {
+  border-color: var(--ctp-surface2);
 }
 
-.dialog-content {
-  position: fixed;
-  left: 50%;
-  top: 50%;
-  max-height: 86vh;
-  width: min(calc(100vw - 2rem), 42rem);
-  transform: translate(-50%, -50%);
-  overflow-y: auto;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 1.5rem;
-  background: #0f172a;
-  color: #f8fafc;
-  padding: 1.5rem;
-  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.45);
+.state-open {
+  color: var(--ctp-green);
 }
 
-.select-content {
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 0.9rem;
-  background: #111827;
-  color: #f8fafc;
+.state-merged {
+  color: var(--ctp-mauve);
 }
 
-.select-item {
-  cursor: pointer;
-  padding: 0.7rem 0.9rem;
+.state-closed {
+  color: var(--ctp-red);
 }
 
-.select-item:hover,
-.select-item[data-highlighted] {
-  background: rgba(103, 232, 249, 0.12);
-  outline: none;
+.state-draft {
+  color: var(--ctp-overlay1);
 }
 
-.scrollbar {
-  width: 10px;
-  padding: 2px;
+.resize-handle {
+  flex-shrink: 0;
+  background: var(--ctp-crust);
+  transition: background 120ms ease;
 }
 
-.scrollbar-thumb {
-  border-radius: 9999px;
-  background: rgba(148, 163, 184, 0.35);
+.resize-handle:hover,
+.resize-handle[data-resize-handle-active] {
+  background: var(--ctp-mauve);
+}
+
+.resize-handle-horizontal {
+  width: 0.3rem;
+  cursor: col-resize;
+}
+
+.resize-handle-vertical {
+  height: 0.3rem;
+  cursor: row-resize;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+/* Monitor: activity pulse — a run pane's ring flashes when new output arrives
+   (the element is remounted per output batch so the animation retriggers) and
+   fades to nothing when idle. --pulse-color is set per pane to its status hue. */
+@keyframes monitor-pulse {
+  from {
+    box-shadow: inset 0 0 0 2px var(--pulse-color, var(--ctp-blue));
+    opacity: 0.9;
+  }
+  to {
+    box-shadow: inset 0 0 0 2px transparent;
+    opacity: 0;
+  }
+}
+
+.monitor-pulse {
+  animation: monitor-pulse 1.2s ease-out forwards;
+}
+
+/* xterm fills its host; keep it from overflowing the rounded pane. */
+.xterm,
+.xterm .xterm-viewport {
+  background-color: transparent !important;
 }

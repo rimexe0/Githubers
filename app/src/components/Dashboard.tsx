@@ -1,138 +1,122 @@
 "use client";
 
-import * as AlertDialog from "@radix-ui/react-alert-dialog";
-import * as Dialog from "@radix-ui/react-dialog";
-import * as ScrollArea from "@radix-ui/react-scroll-area";
-import * as Select from "@radix-ui/react-select";
-import * as Separator from "@radix-ui/react-separator";
 import * as Tabs from "@radix-ui/react-tabs";
-import * as Tooltip from "@radix-ui/react-tooltip";
-import { useEffect, useState, useTransition } from "react";
+import { Menu, X } from "lucide-react";
+import { useEffect, useReducer, useState, useTransition } from "react";
+import { Button } from "@/components/ui/button";
+import { AgentRuns } from "./dashboard/AgentRuns";
+import { Monitor } from "./dashboard/monitor/Monitor";
+import { ProjectBoard } from "./dashboard/ProjectBoard";
+import { RepoChat } from "./dashboard/RepoChat";
+import { ProjectDialog } from "./dashboard/ProjectDialog";
+import { SettingsForm } from "./dashboard/SettingsForm";
+import { Summaries } from "./dashboard/Summaries";
+import { emptySettings, type Project, type Settings, type Summary, type SyncRun } from "./dashboard/types";
+import { api, projectLabel, relativeTime, staticTabs } from "./dashboard/utils";
 
-type Settings = {
-  githubToken: string;
-  pollIntervalMinutes: number;
-  summaryProviderOrder: string;
-  summaryStyle: string;
-  summaryCron: string;
-  lmStudioBaseUrl: string;
-  lmStudioModel: string;
-  lmStudioTemperature: number;
-  lmStudioMaxTokens: number;
-  codexCommand: string;
-  opencodeCommand: string;
-  smtpHost: string;
-  smtpPort: number;
-  smtpUser: string;
-  smtpPassword: string;
-  emailFrom: string;
-  emailTo: string;
-  telegramBotToken: string;
-  telegramChatId: string;
+type DashboardState = {
+  settings: Settings;
+  projects: Project[];
+  syncRuns: SyncRun[];
+  summaries: Summary[];
+  message: string;
 };
 
-type Project = {
-  id: string;
-  owner_type: "org" | "user";
-  owner_login: string;
-  project_number: number;
-  title: string | null;
-  enabled: boolean;
-  repositories: { id: string; ownerLogin: string; repoName: string; enabled: boolean }[];
+type DashboardAction =
+  | { type: "loaded"; payload: Omit<DashboardState, "message"> }
+  | { type: "settings"; settings: Settings }
+  | { type: "message"; message: string };
+
+type DashboardUiState = {
+  selectedTab: string | null;
+  visitedTabs: Set<string>;
+  boardsKey: number;
+  projectDialogOpen: boolean;
+  editingProject: Project | null;
 };
 
-type Change = {
-  id: string;
-  change_type: string;
-  actor_login: string | null;
-  title: string | null;
-  url: string | null;
-  summary: string | null;
-  repository: string | null;
-  occurred_at: string;
-  owner_login: string | null;
-  project_number: number | null;
-  project_title: string | null;
+type DashboardUiAction =
+  | { type: "selectTab"; value: string; activeTab: string }
+  | { type: "bumpBoardsKey" }
+  | { type: "openAddProject" }
+  | { type: "openEditProject"; project: Project }
+  | { type: "setProjectDialogOpen"; open: boolean }
+  | { type: "projectDeleted"; projectId: string };
+
+const initialDashboardState: DashboardState = {
+  settings: emptySettings,
+  projects: [],
+  syncRuns: [],
+  summaries: [],
+  message: "Loading...",
 };
 
-type SyncRun = {
-  id: string;
-  trigger: string;
-  status: string;
-  started_at: string;
-  finished_at: string | null;
-  projects_checked: number;
-  changes_found: number;
-  error: string | null;
+const initialDashboardUiState: DashboardUiState = {
+  selectedTab: null,
+  visitedTabs: new Set(),
+  boardsKey: 0,
+  projectDialogOpen: false,
+  editingProject: null,
 };
 
-type Summary = {
-  id: string;
-  provider: string;
-  title: string;
-  short_body: string;
-  body: string;
-  change_count: number;
-  created_at: string;
-};
+function dashboardReducer(state: DashboardState, action: DashboardAction): DashboardState {
+  if (action.type === "loaded") return { ...state, ...action.payload, message: "Ready" };
+  if (action.type === "settings") return { ...state, settings: action.settings };
+  return { ...state, message: action.message };
+}
 
-const emptySettings: Settings = {
-  githubToken: "",
-  pollIntervalMinutes: 60,
-  summaryProviderOrder: "lmstudio,codex,opencode,none",
-  summaryStyle: "Concise situation summary with what changed, blockers, risks, and next actions.",
-  summaryCron: "0 8 * * *",
-  lmStudioBaseUrl: "http://host.docker.internal:1234/v1",
-  lmStudioModel: "local-model",
-  lmStudioTemperature: 0.2,
-  lmStudioMaxTokens: 2000,
-  codexCommand: "codex exec",
-  opencodeCommand: "opencode run",
-  smtpHost: "",
-  smtpPort: 587,
-  smtpUser: "",
-  smtpPassword: "",
-  emailFrom: "",
-  emailTo: "",
-  telegramBotToken: "",
-  telegramChatId: "",
-};
-
-async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { "content-type": "application/json", ...init?.headers } });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error ?? "Request failed");
-  return data;
+function dashboardUiReducer(state: DashboardUiState, action: DashboardUiAction): DashboardUiState {
+  if (action.type === "selectTab") {
+    const visitedTabs = new Set(state.visitedTabs);
+    visitedTabs.add(action.activeTab);
+    visitedTabs.add(action.value);
+    return { ...state, selectedTab: action.value, visitedTabs };
+  }
+  if (action.type === "bumpBoardsKey") return { ...state, boardsKey: state.boardsKey + 1 };
+  if (action.type === "openAddProject") return { ...state, projectDialogOpen: true, editingProject: null };
+  if (action.type === "openEditProject") return { ...state, projectDialogOpen: true, editingProject: action.project };
+  if (action.type === "setProjectDialogOpen") return { ...state, projectDialogOpen: action.open, editingProject: action.open ? state.editingProject : null };
+  return { ...state, selectedTab: state.selectedTab === action.projectId ? null : state.selectedTab };
 }
 
 export function Dashboard() {
-  const [settings, setSettings] = useState<Settings>(emptySettings);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [changes, setChanges] = useState<Change[]>([]);
-  const [syncRuns, setSyncRuns] = useState<SyncRun[]>([]);
-  const [summaries, setSummaries] = useState<Summary[]>([]);
-  const [message, setMessage] = useState("Loading dashboard...");
+  const [state, dispatch] = useReducer(dashboardReducer, initialDashboardState);
+  const [ui, dispatchUi] = useReducer(dashboardUiReducer, initialDashboardUiState);
+  const [navOpen, setNavOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const { settings, projects, syncRuns, summaries, message } = state;
 
   const refresh = async () => {
-    const [nextSettings, nextProjects, nextChanges, nextSyncRuns, nextSummaries] = await Promise.all([
+    const [nextSettings, nextProjects, nextSyncRuns, nextSummaries] = await Promise.all([
       api<Settings>("/api/settings"),
       api<Project[]>("/api/projects"),
-      api<Change[]>("/api/changes"),
       api<SyncRun[]>("/api/sync"),
       api<Summary[]>("/api/summaries"),
     ]);
-    setSettings(nextSettings);
-    setProjects(nextProjects);
-    setChanges(nextChanges);
-    setSyncRuns(nextSyncRuns);
-    setSummaries(nextSummaries);
-    setMessage("Ready");
+    dispatch({
+      type: "loaded",
+      payload: { settings: nextSettings, projects: nextProjects, syncRuns: nextSyncRuns, summaries: nextSummaries },
+    });
   };
 
   useEffect(() => {
-    refresh().catch((error) => setMessage(error.message));
+    (async () => {
+      try {
+        await refresh();
+        // Cheap freshness check on load; full sync only when stale or changed upstream.
+        const auto = await api<{ synced: boolean; reason: string }>("/api/sync/auto", { method: "POST" });
+        if (auto.synced) {
+          await refresh();
+          dispatchUi({ type: "bumpBoardsKey" });
+          dispatch({ type: "message", message: `Auto-synced: ${auto.reason.toLowerCase()}` });
+        }
+      } catch (error) {
+        dispatch({ type: "message", message: error instanceof Error ? error.message : "Load failed" });
+      }
+    })();
   }, []);
+
+  const setMessage = (nextMessage: string) => dispatch({ type: "message", message: nextMessage });
 
   const runAction = (label: string, action: () => Promise<unknown>) => {
     startTransition(async () => {
@@ -147,292 +131,190 @@ export function Dashboard() {
     });
   };
 
-  return (
-    <Tooltip.Provider>
-      <main className="min-h-screen bg-[#0b1020] text-slate-100">
-        <div className="mx-auto flex max-w-7xl flex-col gap-8 px-5 py-6 md:px-8">
-          <header className="flex flex-col gap-4 rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-2xl shadow-black/20 md:flex-row md:items-end md:justify-between">
-            <div>
-              <p className="text-sm uppercase tracking-[0.35em] text-cyan-300">Githubers</p>
-              <h1 className="mt-3 text-4xl font-semibold tracking-tight">Project change watcher</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
-                LAN/Tailscale dashboard for GitHub Projects v2 polling, Postgres history, local LM Studio summaries, and email/Telegram notifications.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-3">
-              <button type="button" className="button-primary" disabled={isPending} onClick={() => runAction("Manual sync", () => api("/api/sync", { method: "POST" }))}>
-                Sync now
-              </button>
-              <button type="button" className="button-secondary" disabled={isPending} onClick={() => runAction("Manual summary", () => api("/api/summaries", { method: "POST" }))}>
-                Summarize
-              </button>
-            </div>
-          </header>
+  const openAddProject = () => {
+    dispatchUi({ type: "openAddProject" });
+  };
 
-          <section className="grid gap-4 md:grid-cols-4">
-            <Metric label="Projects" value={projects.length} />
-            <Metric label="Recent changes" value={changes.length} />
-            <Metric label="Sync runs" value={syncRuns.length} />
-            <Metric label="Summaries" value={summaries.length} />
-          </section>
+  const openEditProject = (project: Project) => {
+    dispatchUi({ type: "openEditProject", project });
+  };
 
-          <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-4 py-3 text-sm text-cyan-100">{message}</div>
+  const deleteProject = async (project: Project) => {
+    await api(`/api/projects/${project.id}`, { method: "DELETE" });
+    dispatchUi({ type: "projectDeleted", projectId: project.id });
+    await refresh();
+    setMessage("Project deleted");
+  };
 
-          <Tabs.Root defaultValue="overview" className="rounded-3xl border border-white/10 bg-slate-950/70 p-2">
-            <Tabs.List className="flex flex-wrap gap-2 rounded-2xl bg-black/20 p-2">
-              {[
-                ["overview", "Overview"],
-                ["projects", "Projects"],
-                ["changes", "Changes"],
-                ["summaries", "Summaries"],
-                ["settings", "Settings"],
-              ].map(([value, label]) => (
-                <Tabs.Trigger key={value} value={value} className="tab-trigger">
-                  {label}
-                </Tabs.Trigger>
-              ))}
-            </Tabs.List>
-
-            <Tabs.Content value="overview" className="p-4 md:p-6">
-              <Overview projects={projects} syncRuns={syncRuns} summaries={summaries} />
-            </Tabs.Content>
-            <Tabs.Content value="projects" className="p-4 md:p-6">
-              <Projects projects={projects} refresh={refresh} setMessage={setMessage} />
-            </Tabs.Content>
-            <Tabs.Content value="changes" className="p-4 md:p-6">
-              <Changes changes={changes} />
-            </Tabs.Content>
-            <Tabs.Content value="summaries" className="p-4 md:p-6">
-              <Summaries summaries={summaries} />
-            </Tabs.Content>
-            <Tabs.Content value="settings" className="p-4 md:p-6">
-              <SettingsForm settings={settings} setSettings={setSettings} refresh={refresh} setMessage={setMessage} />
-            </Tabs.Content>
-          </Tabs.Root>
-        </div>
-      </main>
-    </Tooltip.Provider>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.06] p-5">
-      <p className="text-sm text-slate-400">{label}</p>
-      <p className="mt-2 text-3xl font-semibold">{value}</p>
-    </div>
-  );
-}
-
-function Overview({ projects, syncRuns, summaries }: { projects: Project[]; syncRuns: SyncRun[]; summaries: Summary[] }) {
+  const validTabs = [...projects.map((project) => project.id), ...staticTabs];
+  const activeTab = ui.selectedTab && validTabs.includes(ui.selectedTab) ? ui.selectedTab : (projects[0]?.id ?? "summaries");
   const latestSync = syncRuns[0];
-  const latestSummary = summaries[0];
-  return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Panel title="Watched projects">
-        <div className="space-y-3">
-          {projects.map((project) => (
-            <div key={project.id} className="rounded-xl bg-white/[0.04] p-4">
-              <div className="font-medium">{project.title || `${project.owner_login} #${project.project_number}`}</div>
-              <div className="mt-1 text-sm text-slate-400">{project.owner_type}/{project.owner_login} project {project.project_number}</div>
-            </div>
-          ))}
-          {!projects.length && <Empty text="Add your first user or org Project v2 board." />}
-        </div>
-      </Panel>
-      <Panel title="Runtime status">
-        <div className="space-y-4 text-sm text-slate-300">
-          <p>Latest sync: {latestSync ? `${latestSync.status}, ${latestSync.changes_found} changes` : "No sync runs yet"}</p>
-          <p>Latest summary: {latestSummary ? `${latestSummary.provider}, ${latestSummary.change_count} changes` : "No summaries yet"}</p>
-          <p>Scheduler: initialized by Next.js instrumentation in self-hosted Node runtime.</p>
-        </div>
-      </Panel>
-    </div>
-  );
-}
 
-function Projects({ projects, refresh, setMessage }: { projects: Project[]; refresh: () => Promise<void>; setMessage: (message: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [ownerType, setOwnerType] = useState<"org" | "user">("org");
-  const [ownerLogin, setOwnerLogin] = useState("");
-  const [projectNumber, setProjectNumber] = useState("");
-  const [title, setTitle] = useState("");
-  const [repos, setRepos] = useState("");
-
-  const save = async () => {
-    await api("/api/projects", {
-      method: "POST",
-      body: JSON.stringify({
-        ownerType,
-        ownerLogin,
-        projectNumber: Number(projectNumber),
-        title,
-        repositories: repos
-          .split("\n")
-          .flatMap((line) => {
-            const repo = line.trim();
-            if (!repo) return [];
-            const [repoOwner, repoName] = repo.split("/");
-            return repoOwner && repoName ? [{ ownerLogin: repoOwner, repoName }] : [];
-          }),
-      }),
-    });
-    setOpen(false);
-    setOwnerLogin("");
-    setProjectNumber("");
-    setTitle("");
-    setRepos("");
-    await refresh();
-    setMessage("Project saved");
+  const changeTab = (value: string) => {
+    dispatchUi({ type: "selectTab", value, activeTab });
+    setNavOpen(false);
   };
 
+  const staticTabLabels: Record<string, string> = {
+    chat: "Chat",
+    "agent-runs": "Agent runs",
+    monitor: "Monitor",
+    summaries: "Summaries",
+    settings: "Settings",
+  };
+  const activeProject = projects.find((project) => project.id === activeTab);
+  const activeTabLabel = activeProject ? projectLabel(activeProject) : (staticTabLabels[activeTab] ?? "Menu");
+
   return (
-    <Panel title="Projects" action={<button type="button" className="button-primary" onClick={() => setOpen(true)}>Add project</button>}>
-      <div className="space-y-3">
-        {projects.map((project) => (
-          <div key={project.id} className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="font-medium">{project.title || `${project.owner_login} #${project.project_number}`}</div>
-              <div className="text-sm text-slate-400">{project.owner_type}/{project.owner_login} project {project.project_number}</div>
-              <div className="mt-2 text-xs text-slate-500">Repos: {project.repositories.map((repo) => `${repo.ownerLogin}/${repo.repoName}`).join(", ") || "none configured"}</div>
-            </div>
-            <AlertDialog.Root>
-              <AlertDialog.Trigger asChild><button type="button" className="button-danger">Delete</button></AlertDialog.Trigger>
-              <AlertDialog.Portal>
-                <AlertDialog.Overlay className="dialog-overlay" />
-                <AlertDialog.Content className="dialog-content">
-                  <AlertDialog.Title className="text-lg font-semibold">Delete project?</AlertDialog.Title>
-                  <AlertDialog.Description className="mt-2 text-sm text-slate-300">This removes the project config and stored child records.</AlertDialog.Description>
-                  <div className="mt-6 flex justify-end gap-3">
-                    <AlertDialog.Cancel className="button-secondary">Cancel</AlertDialog.Cancel>
-                    <AlertDialog.Action className="button-danger" onClick={async () => { await api(`/api/projects/${project.id}`, { method: "DELETE" }); await refresh(); }}>Delete</AlertDialog.Action>
-                  </div>
-                </AlertDialog.Content>
-              </AlertDialog.Portal>
-            </AlertDialog.Root>
+    <main className="h-screen w-full">
+      <div className="mx-auto flex h-full w-full max-w-full flex-col">
+        <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-card px-3 py-1.5">
+          <span className="font-semibold tracking-tight text-[var(--ctp-mauve)]">githubers</span>
+          <span className="hidden text-xs text-muted-foreground sm:inline">
+            {latestSync ? `last sync ${relativeTime(latestSync.started_at)} ago, ${latestSync.status}` : "no syncs yet"}
+          </span>
+          <span className="ml-auto truncate text-xs text-muted-foreground">{message}</span>
+          <div className="flex items-center">
+            <Button
+              type="button"
+              size="xs"
+              className="rounded-r-none"
+              disabled={isPending || !projects.some((project) => project.id === activeTab)}
+              onClick={() =>
+                runAction("Sync", async () => {
+                  await api(`/api/projects/${activeTab}/sync`, { method: "POST" });
+                  dispatchUi({ type: "bumpBoardsKey" });
+                })
+              }
+            >
+              Sync
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="xs"
+              className="rounded-l-none border-l border-border/60"
+              disabled={isPending}
+              title="Sync all projects"
+              onClick={() =>
+                runAction("Sync all", async () => {
+                  await api("/api/sync", { method: "POST" });
+                  dispatchUi({ type: "bumpBoardsKey" });
+                })
+              }
+            >
+              All
+            </Button>
           </div>
-        ))}
-        {!projects.length && <Empty text="No projects configured yet." />}
-      </div>
+          <Button type="button" variant="secondary" size="xs" disabled={isPending} onClick={() => runAction("Summary", () => api("/api/summaries", { method: "POST" }))}>
+            Summarize
+          </Button>
+        </header>
 
-      <Dialog.Root open={open} onOpenChange={setOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="dialog-overlay" />
-          <Dialog.Content className="dialog-content max-w-2xl">
-            <Dialog.Title className="text-xl font-semibold">Add GitHub Project v2</Dialog.Title>
-            <div className="mt-5 grid gap-4">
-              <label className="field-label" id="owner-type-label" htmlFor="owner-type-trigger">Owner type</label>
-              <Select.Root value={ownerType} onValueChange={(value) => setOwnerType(value as "org" | "user")}>
-                <Select.Trigger id="owner-type-trigger" className="input" aria-labelledby="owner-type-label"><Select.Value /></Select.Trigger>
-                <Select.Portal><Select.Content className="select-content"><Select.Item className="select-item" value="org">Org</Select.Item><Select.Item className="select-item" value="user">User</Select.Item></Select.Content></Select.Portal>
-              </Select.Root>
-              <Input label="Owner login" value={ownerLogin} onChange={setOwnerLogin} />
-              <Input label="Project number" value={projectNumber} onChange={setProjectNumber} />
-              <Input label="Display title" value={title} onChange={setTitle} />
-              <label className="field-label" htmlFor="project-repos">Linked repos, one owner/name per line</label>
-              <textarea id="project-repos" className="input min-h-28" value={repos} onChange={(event) => setRepos(event.target.value)} placeholder="my-org/private-repo" />
-              <div className="flex justify-end gap-3"><Dialog.Close className="button-secondary">Cancel</Dialog.Close><button type="button" className="button-primary" onClick={save}>Save</button></div>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-    </Panel>
-  );
-}
+        <Tabs.Root value={activeTab} onValueChange={changeTab} className="flex min-h-0 flex-1 flex-col">
+          {/* Mobile: a menu button + current-view label instead of a scrolling tab strip. */}
+          <div className="relative flex shrink-0 items-center gap-2 border-b border-border bg-card px-2 py-1 md:hidden">
+            <Button type="button" variant="secondary" size="xs" onClick={() => setNavOpen((open) => !open)} aria-label="Menu">
+              {navOpen ? <X className="size-3.5" /> : <Menu className="size-3.5" />}
+            </Button>
+            <span className="truncate text-sm font-semibold">{activeTabLabel}</span>
+            {navOpen && (
+              <>
+                <button type="button" aria-label="Close menu" className="fixed inset-0 z-30 cursor-default bg-black/20" onClick={() => setNavOpen(false)} />
+                <div className="absolute inset-x-0 top-full z-40 max-h-[70vh] overflow-y-auto border-b border-border bg-card p-1 shadow-lg">
+                  {projects.map((project) => (
+                    <button
+                      key={project.id}
+                      type="button"
+                      onClick={() => changeTab(project.id)}
+                      className={`block w-full truncate rounded px-2 py-2 text-left text-sm ${activeTab === project.id ? "bg-accent font-semibold" : "hover:bg-accent/50"}`}
+                    >
+                      {projectLabel(project)}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      openAddProject();
+                      setNavOpen(false);
+                    }}
+                    className="block w-full rounded px-2 py-2 text-left text-sm text-muted-foreground hover:bg-accent/50"
+                  >
+                    + project
+                  </button>
+                  <div className="my-1 h-px bg-border" />
+                  {Object.entries(staticTabLabels).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => changeTab(value)}
+                      className={`block w-full rounded px-2 py-2 text-left text-sm ${activeTab === value ? "bg-accent font-semibold" : "hover:bg-accent/50"}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
 
-function Changes({ changes }: { changes: Change[] }) {
-  return (
-    <Panel title="Recent changes">
-      <ScrollArea.Root className="h-[540px] overflow-hidden rounded-xl border border-white/10">
-        <ScrollArea.Viewport className="h-full w-full">
-          <div className="divide-y divide-white/10">
-            {changes.map((change) => (
-              <article key={change.id} className="p-4">
-                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400"><span>{change.change_type}</span><span>{new Date(change.occurred_at).toLocaleString()}</span><span>{change.repository}</span></div>
-                <h3 className="mt-2 font-medium">{change.url ? <a className="text-cyan-200 hover:underline" href={change.url} target="_blank">{change.title}</a> : change.title}</h3>
-                <p className="mt-1 text-sm text-slate-400">{change.summary}</p>
-              </article>
+          <Tabs.List className="hidden shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-card px-1 md:flex">
+            {projects.map((project) => (
+              <Tabs.Trigger key={project.id} value={project.id} className="tab-trigger">
+                {projectLabel(project)}
+              </Tabs.Trigger>
             ))}
-            {!changes.length && <Empty text="No changes captured yet. Run sync after configuring a token and project." />}
-          </div>
-        </ScrollArea.Viewport>
-        <ScrollArea.Scrollbar className="scrollbar" orientation="vertical"><ScrollArea.Thumb className="scrollbar-thumb" /></ScrollArea.Scrollbar>
-      </ScrollArea.Root>
-    </Panel>
-  );
-}
+            <button type="button" className="px-2 py-1 text-xs font-semibold text-muted-foreground hover:text-foreground" onClick={openAddProject}>
+              + project
+            </button>
+            <div className="mx-2 h-4 w-px bg-border" />
+            <Tabs.Trigger value="chat" className="tab-trigger">Chat</Tabs.Trigger>
+            <Tabs.Trigger value="agent-runs" className="tab-trigger">Agent runs</Tabs.Trigger>
+            <Tabs.Trigger value="monitor" className="tab-trigger">Monitor</Tabs.Trigger>
+            <Tabs.Trigger value="summaries" className="tab-trigger">Summaries</Tabs.Trigger>
+            <Tabs.Trigger value="settings" className="tab-trigger">Settings</Tabs.Trigger>
+          </Tabs.List>
 
-function Summaries({ summaries }: { summaries: Summary[] }) {
-  return (
-    <Panel title="Summaries">
-      <div className="space-y-4">
-        {summaries.map((summary) => (
-          <article key={summary.id} className="rounded-xl border border-white/10 bg-white/[0.04] p-4">
-            <div className="text-xs uppercase tracking-widest text-cyan-300">{summary.provider} · {summary.change_count} changes · {new Date(summary.created_at).toLocaleString()}</div>
-            <h3 className="mt-2 text-lg font-semibold">{summary.title}</h3>
-            <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-300">{summary.short_body}</p>
-          </article>
-        ))}
-        {!summaries.length && <Empty text="No summaries yet." />}
+          {projects.map((project) => (
+            // forceMount keeps visited boards alive across tab switches so they fetch once.
+            <Tabs.Content
+              key={project.id}
+              value={project.id}
+              forceMount={ui.visitedTabs.has(project.id) || activeTab === project.id ? true : undefined}
+              className="tab-content panel min-h-0 flex-1 overflow-hidden p-3"
+            >
+              <ProjectBoard project={project} refreshKey={ui.boardsKey} onEdit={() => openEditProject(project)} onDelete={() => deleteProject(project)} />
+            </Tabs.Content>
+          ))}
+          <Tabs.Content value="chat" className="panel min-h-0 flex-1 overflow-hidden p-3">
+            <RepoChat settings={settings} />
+          </Tabs.Content>
+          <Tabs.Content value="agent-runs" className="panel min-h-0 flex-1 overflow-hidden p-3">
+            <AgentRuns settings={settings} />
+          </Tabs.Content>
+          <Tabs.Content value="monitor" className="panel min-h-0 flex-1 overflow-hidden p-3">
+            <Monitor settings={settings} />
+          </Tabs.Content>
+          <Tabs.Content value="summaries" className="panel min-h-0 flex-1 overflow-y-auto p-3">
+            <Summaries summaries={summaries} />
+          </Tabs.Content>
+          <Tabs.Content value="settings" className="panel min-h-0 flex-1 overflow-y-auto p-3">
+            <SettingsForm settings={settings} setSettings={(nextSettings) => dispatch({ type: "settings", settings: nextSettings })} refresh={refresh} setMessage={setMessage} />
+          </Tabs.Content>
+        </Tabs.Root>
       </div>
-    </Panel>
+
+      <ProjectDialog
+        open={ui.projectDialogOpen}
+        editingProject={ui.editingProject}
+        onOpenChange={(nextOpen) => {
+          dispatchUi({ type: "setProjectDialogOpen", open: nextOpen });
+        }}
+        onSaved={async (savedMessage) => {
+          await refresh();
+          setMessage(savedMessage);
+        }}
+      />
+    </main>
   );
-}
-
-function SettingsForm({ settings, setSettings, refresh, setMessage }: { settings: Settings; setSettings: (settings: Settings) => void; refresh: () => Promise<void>; setMessage: (message: string) => void }) {
-  const update = <K extends keyof Settings>(key: K, value: Settings[K]) => setSettings({ ...settings, [key]: value });
-  const save = async () => {
-    await api("/api/settings", { method: "PUT", body: JSON.stringify(settings) });
-    await refresh();
-    setMessage("Settings saved");
-  };
-
-  return (
-    <Panel title="Settings" action={<button type="button" className="button-primary" onClick={save}>Save settings</button>}>
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="space-y-4">
-          <h3 className="font-semibold">GitHub and scheduling</h3>
-          <Input label="GitHub token" type="password" value={settings.githubToken} onChange={(value) => update("githubToken", value)} />
-          <Input label="Poll interval minutes" value={String(settings.pollIntervalMinutes)} onChange={(value) => update("pollIntervalMinutes", Number(value))} />
-          <Input label="Daily summary cron" value={settings.summaryCron} onChange={(value) => update("summaryCron", value)} />
-          <Separator.Root className="h-px bg-white/10" />
-          <h3 className="font-semibold">Summarizers</h3>
-          <Input label="Provider order" value={settings.summaryProviderOrder} onChange={(value) => update("summaryProviderOrder", value)} />
-          <Input label="LM Studio base URL" value={settings.lmStudioBaseUrl} onChange={(value) => update("lmStudioBaseUrl", value)} />
-          <Input label="LM Studio model" value={settings.lmStudioModel} onChange={(value) => update("lmStudioModel", value)} />
-          <Input label="Codex command" value={settings.codexCommand} onChange={(value) => update("codexCommand", value)} />
-          <Input label="OpenCode command" value={settings.opencodeCommand} onChange={(value) => update("opencodeCommand", value)} />
-        </div>
-        <div className="space-y-4">
-          <h3 className="font-semibold">Summary style</h3>
-          <label className="sr-only" htmlFor="summary-style">Summary style</label>
-          <textarea id="summary-style" className="input min-h-32" value={settings.summaryStyle} onChange={(event) => update("summaryStyle", event.target.value)} />
-          <h3 className="font-semibold">Email</h3>
-          <Input label="SMTP host" value={settings.smtpHost} onChange={(value) => update("smtpHost", value)} />
-          <Input label="SMTP port" value={String(settings.smtpPort)} onChange={(value) => update("smtpPort", Number(value))} />
-          <Input label="SMTP user" value={settings.smtpUser} onChange={(value) => update("smtpUser", value)} />
-          <Input label="SMTP password" type="password" value={settings.smtpPassword} onChange={(value) => update("smtpPassword", value)} />
-          <Input label="Email from" value={settings.emailFrom} onChange={(value) => update("emailFrom", value)} />
-          <Input label="Email to" value={settings.emailTo} onChange={(value) => update("emailTo", value)} />
-          <button type="button" className="button-secondary" onClick={() => api("/api/notifications/test-email", { method: "POST" }).then(() => setMessage("Test email sent")).catch((error) => setMessage(error.message))}>Test email</button>
-          <h3 className="font-semibold">Telegram</h3>
-          <Input label="Bot token" type="password" value={settings.telegramBotToken} onChange={(value) => update("telegramBotToken", value)} />
-          <Input label="Chat ID" value={settings.telegramChatId} onChange={(value) => update("telegramChatId", value)} />
-          <button type="button" className="button-secondary" onClick={() => api("/api/notifications/test-telegram", { method: "POST" }).then(() => setMessage("Test Telegram sent")).catch((error) => setMessage(error.message))}>Test Telegram</button>
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
-function Panel({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
-  return <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5"><div className="mb-5 flex items-center justify-between gap-4"><h2 className="text-xl font-semibold">{title}</h2>{action}</div>{children}</section>;
-}
-
-function Input({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
-  return <label className="block"><span className="field-label">{label}</span><input className="input mt-2" type={type} value={value} onChange={(event) => onChange(event.target.value)} /></label>;
-}
-
-function Empty({ text }: { text: string }) {
-  return <div className="rounded-xl border border-dashed border-white/15 p-6 text-center text-sm text-slate-400">{text}</div>;
 }
