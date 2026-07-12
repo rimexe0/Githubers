@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { AgentsmdSection } from "./agentsmd/AgentsmdSection";
+import { AutomatorProjects } from "./AutomatorProjects";
 import type { Settings } from "./types";
 import { api } from "./utils";
 
@@ -86,6 +87,7 @@ export function SettingsForm({ settings, setSettings, refresh, setMessage }: { s
             />
           </div>
           <Button type="button" variant="secondary" size="sm" onClick={() => api<{ runCount: number }>("/api/automator/health", { method: "POST" }).then((result) => setMessage(`Automator OK (${result.runCount} run${result.runCount === 1 ? "" : "s"})`)).catch((error) => setMessage(error.message))}>Test daemon</Button>
+          <AutomatorProjects enabled={settings.automatorEnabled} legacyRepoPaths={settings.automatorRepoPaths} legacyTriggers={settings.automatorTriggers} />
         </div>
       </div>
 

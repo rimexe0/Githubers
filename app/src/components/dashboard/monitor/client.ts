@@ -4,7 +4,7 @@
 // flushed once per animation frame so a chatty stream never triggers a setState
 // per chunk. Framework-agnostic — React glue lives in store.ts / MonitorProvider.
 
-import type { Channel, Envelope } from "./envelope";
+import type { Channel, Envelope, RpcPayload } from "./envelope";
 
 export type ConnStatus = "connecting" | "open" | "closed" | "disabled";
 export type OutputSink = (text: string) => void;
@@ -37,6 +37,7 @@ export class MonitorClient {
   private anyOutputSinks = new Set<AnyOutputSink>();
   private eventListeners = new Set<EventListener>();
   private connListeners = new Set<ConnListener>();
+  private pendingRpc = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 
   constructor(url: string) {
     this.url = url;
@@ -107,6 +108,7 @@ export class MonitorClient {
     if (this.flushHandle !== null && typeof cancelAnimationFrame !== "undefined") cancelAnimationFrame(this.flushHandle);
     this.flushHandle = null;
     this.outBuffers.clear();
+    this.rejectPendingRpc(new Error("WebSocket closed"));
     this.socket?.close();
     this.socket = null;
     this.setStatus("closed");
@@ -150,6 +152,7 @@ export class MonitorClient {
     }
 
     // Low-frequency control frames (status / permission-request / event): now.
+    if (env.type === "rpc-response") this.resolveRpc((env.payload ?? {}) as RpcPayload);
     for (const listener of this.eventListeners) listener(env);
   }
 
@@ -226,8 +229,29 @@ export class MonitorClient {
   answer(channel: Channel, payload: unknown) {
     this.rawSend(channel, "answer", payload);
   }
-  rpc(method: string, params: unknown = {}) {
-    this.rawSend("rpc", "rpc-request", { method, params });
+  rpc<T = unknown>(method: string, params: unknown = {}, timeoutMs = 15_000): Promise<T> {
+    const id = crypto.randomUUID();
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => { this.pendingRpc.delete(id); reject(new Error(`RPC timed out: ${method}`)); }, timeoutMs);
+      this.pendingRpc.set(id, { resolve: (value) => resolve(value as T), reject, timer });
+      if (!this.rawSend("rpc", "rpc-request", { id, method, params })) {
+        clearTimeout(timer); this.pendingRpc.delete(id); reject(new Error("WebSocket is not open"));
+      }
+    });
+  }
+
+  private resolveRpc(payload: RpcPayload) {
+    if (!payload.id) return;
+    const pending = this.pendingRpc.get(payload.id);
+    if (!pending) return;
+    clearTimeout(pending.timer); this.pendingRpc.delete(payload.id);
+    if (payload.ok) pending.resolve(payload.result);
+    else pending.reject(new Error(payload.error ?? payload.code ?? "RPC failed"));
+  }
+
+  private rejectPendingRpc(error: Error) {
+    for (const pending of this.pendingRpc.values()) { clearTimeout(pending.timer); pending.reject(error); }
+    this.pendingRpc.clear();
   }
 
   // --- listener registration -------------------------------------------------

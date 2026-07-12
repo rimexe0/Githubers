@@ -7,7 +7,7 @@
 
 import type { AutomatorRun } from "../types";
 import type { ConnStatus } from "./client";
-import { attentionRank, parseRunChannel, type PermissionOption, type PermissionPayload, statusMeta, type StatusPayload } from "./envelope";
+import { attentionRank, parseRunChannel, type EventPayload, type PermissionOption, type PermissionPayload, statusMeta, type StatusPayload } from "./envelope";
 
 export type RunView = {
   id: string;
@@ -21,6 +21,10 @@ export type RunView = {
   prUrl?: string | null;
   autonomy?: string;
   issueNumber?: number | null;
+  route?: string | null;
+  currentEpisode?: number;
+  episodeStatus?: string;
+  events: { kind: string; text: string; at: number }[];
 };
 
 export type PermissionRequest = {
@@ -133,6 +137,9 @@ export class MonitorStore {
         existing.label = runLabel(run);
         existing.autonomy = run.autonomy;
         existing.issueNumber = run.issueNumber;
+        existing.route = run.route;
+        existing.currentEpisode = run.currentEpisode;
+        existing.episodeStatus = run.episodeStatus;
         existing.prUrl = run.prUrl ?? existing.prUrl;
         existing.error = run.lastError ?? existing.error;
         if (rosterAt >= existing.statusAt) {
@@ -152,6 +159,10 @@ export class MonitorStore {
           prUrl: run.prUrl,
           autonomy: run.autonomy,
           issueNumber: run.issueNumber,
+          route: run.route,
+          currentEpisode: run.currentEpisode,
+          episodeStatus: run.episodeStatus,
+          events: [],
           _tail: "",
           statusAt: rosterAt,
         });
@@ -186,6 +197,17 @@ export class MonitorStore {
       .map((line) => line.replace(/\r/g, "").trimEnd())
       .filter((line) => line.length > 0)
       .slice(-PREVIEW_LINES);
+    view.lastActivity = Date.now();
+    this.markDirty();
+  }
+
+  applyEvent(channel: string, payload: EventPayload) {
+    const view = this.runByChannel(channel);
+    if (!view) return;
+    const kind = payload.kind ?? "event";
+    const text = payload.text ?? payload.message ?? payload.summary ?? [payload.tool, payload.label, payload.status].filter(Boolean).join(" · ");
+    view.events = [...view.events, { kind, text: text || kind, at: Date.now() }].slice(-100);
+    if (kind === "error" || kind === "run.error") view.error = payload.message ?? payload.text ?? "Run error";
     view.lastActivity = Date.now();
     this.markDirty();
   }
@@ -232,6 +254,7 @@ export class MonitorStore {
       lastActivity: Date.now(),
       _tail: "",
       statusAt: 0,
+      events: [],
     };
     this.runs.set(parsed.id, stub);
     return stub;

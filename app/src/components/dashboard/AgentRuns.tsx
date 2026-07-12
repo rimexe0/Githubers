@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { AutomatorRun, AutomatorStep, Settings } from "./types";
 import { api, relativeTime, runStateMeta } from "./utils";
+import { RemoteActionDialog } from "./RemoteActionDialog";
+import type { RemoteAction } from "@/server/automator";
 
 const POLL_MS = 2500;
 
@@ -12,10 +14,10 @@ const POLL_MS = 2500;
 // will 409 on an illegal action, but this keeps the UI from offering nonsense.
 function actionsFor(run: AutomatorRun): string[] {
   const s = run.state.toUpperCase();
-  if (s === "AWAITING_APPROVAL") return ["approve", "open-pr", "stop"];
+  if (s === "AWAITING_APPROVAL") return ["stop"];
   if (["DONE", "FAILED", "STOPPED"].includes(s)) return [];
   if (s === "PAUSED") return ["resume", "stop", "kill"];
-  if (s === "HUMAN_NEEDED") return ["open-pr", "stop", "kill"];
+  if (s === "HUMAN_NEEDED") return ["stop", "kill"];
   return ["pause", "stop", "kill"]; // active states
 }
 
@@ -153,6 +155,7 @@ function RunDetail({ run, busy, onAction }: { run: AutomatorRun; busy: boolean; 
   const [artifacts, setArtifacts] = useState<string[]>([]);
   const [diff, setDiff] = useState<string | null>(null);
   const [prMessage, setPrMessage] = useState<string | null>(null);
+  const [remoteAction, setRemoteAction] = useState<RemoteAction | null>(null);
   const lastFetched = useRef<string>("");
 
   // Refetch the timeline + artifacts whenever the run id or its state/updatedAt
@@ -231,6 +234,12 @@ function RunDetail({ run, busy, onAction }: { run: AutomatorRun; busy: boolean; 
           ))}
         </div>
       )}
+      {run.repoPath && run.branch && (
+        <div className="rounded-md border border-[var(--ctp-peach)]/40 bg-[var(--ctp-peach)]/5 p-2">
+          <div className="mb-1 text-[0.65rem] text-muted-foreground">Remote writes require an exact command and outgoing commit identity preview.</div>
+          <Button size="xs" onClick={() => setRemoteAction({ kind: "push", repoPath: run.repoPath!, branch: run.branch! })}>Preview push</Button>
+        </div>
+      )}
 
       <section>
         <h3 className="mb-1 font-semibold text-[var(--ctp-lavender)]">Timeline</h3>
@@ -290,6 +299,7 @@ function RunDetail({ run, busy, onAction }: { run: AutomatorRun; busy: boolean; 
           </div>
         </section>
       )}
+      <RemoteActionDialog action={remoteAction} open={remoteAction !== null} onOpenChange={(open) => { if (!open) setRemoteAction(null); }} onExecuted={() => setRemoteAction(null)} />
     </div>
   );
 }

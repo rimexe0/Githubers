@@ -18,6 +18,7 @@ Core local/Tailscale watcher implementation is in place and builds successfully.
 | Summarizers | Complete for core | LM Studio, Codex, OpenCode, and none providers added with UI-configurable order. |
 | Notifications | Complete for core | Generated summaries deliver full email and concise Telegram messages when configured. |
 | Docs | In progress | README quick start, LM Studio, Gmail, Telegram, webhook, and verification notes added. |
+| AgentAutomator integration | Complete for current daemon contract | Repository reads with GraphQL fallback, authoritative project policy, Briefing, read-only PR review, preview-token remote actions, complete rules lifecycle, structured monitor events, and correlated RPC added. |
 
 ## Next Steps
 
@@ -30,6 +31,7 @@ Core local/Tailscale watcher implementation is in place and builds successfully.
 ## Verification
 
 - `npm run typecheck` passes in `app/`.
+- `npm test` passes in `app/`.
 - `npm run build` passes in `app/`.
 - `docker compose config` passes at repo root.
 - Full `react-doctor` scan passes at 100/100.

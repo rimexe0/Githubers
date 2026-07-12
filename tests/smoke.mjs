@@ -88,6 +88,33 @@ async function smokeHttp(settings) {
     pass("automator runs proxy", `${runs.length} run(s)`);
   });
 
+  await check("automator project policy", async () => {
+    const projects = await request("/api/automator/projects");
+    assert(Array.isArray(projects), "project policy response is not an array");
+    pass("automator project policy", `${projects.length} project(s)`);
+  });
+
+  await check("briefing task list", async () => {
+    const tasks = await request("/api/automator/briefing/tasks");
+    assert(Array.isArray(tasks), "briefing task response is not an array");
+    pass("briefing task list", `${tasks.length} task(s)`);
+  });
+
+  await check("rules lifecycle lists", async () => {
+    const [repeated, maintenance] = await Promise.all([request("/api/automator/rules/repeated"), request("/api/automator/rules/maintenance")]);
+    assert(Array.isArray(repeated) && Array.isArray(maintenance), "rules lifecycle response is invalid");
+    pass("rules lifecycle lists", `${repeated.length} repeated, ${maintenance.length} maintenance`);
+  });
+
+  await check("AgentAutomator GitHub repository read", async () => {
+    const repos = await request("/api/automator/projects");
+    const repo = repos[0]?.githubRepo;
+    if (!repo) return pass("AgentAutomator GitHub repository read", "skipped: no daemon project");
+    const result = await request(`/api/automator/github-read`, { method: "POST", body: JSON.stringify({ repo }) });
+    assert(Array.isArray(result), "repository read did not return an array");
+    pass("AgentAutomator GitHub repository read", repo);
+  });
+
   await check("automator chat repo list", async () => {
     const chat = await request("/api/automator/chat");
     assert(chat.enabled === true, "chat proxy is disabled");

@@ -13,6 +13,7 @@ import type { Settings } from "../types";
 import { MigrationWizard } from "./MigrationWizard";
 import { mockDoctorResult, SAMPLE_AGENTS_MD } from "./mocks";
 import { ReceiptsBrowser } from "./ReceiptsBrowser";
+import { RulesLifecycle } from "./RulesLifecycle";
 
 // The AGENTS.md section houses the doctor, the migration wizard, and the
 // standalone provenance (receipts) browser. It lives inside Settings.
@@ -208,6 +209,7 @@ export function AgentsmdSection({ settings }: { settings: Settings }) {
       </div>
 
       <MigrationWizard open={wizardOpen} onOpenChange={setWizardOpen} enabled={enabled} agentsmd={content} />
+      <RulesLifecycle enabled={enabled} />
 
       <Dialog open={receiptsOpen} onOpenChange={setReceiptsOpen}>
         <DialogContent className="flex h-[82vh] w-full flex-col gap-3 sm:max-w-4xl" showCloseButton>

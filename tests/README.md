@@ -21,7 +21,9 @@ node tests/smoke.mjs --with-model
 ```
 
 Without `--with-model`, the script skips model-backed checks and only tests the
-dashboard, daemon proxy, WebSocket RPC, and PTY terminal path.
+dashboard, daemon proxy, project policy, briefing/rules reads, AgentAutomator
+GitHub reads, WebSocket RPC, and PTY terminal path. This is the required smoke
+path and does not require a local model or GPU.
 
 ## Environment
 

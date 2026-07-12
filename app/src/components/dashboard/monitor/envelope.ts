@@ -45,6 +45,20 @@ export type PermissionPayload = {
   runId?: string;
 };
 
+export type RpcPayload = { id?: string; ok?: boolean; result?: unknown; error?: string; code?: string };
+export type EventPayload = {
+  kind?: string;
+  text?: string;
+  message?: string;
+  tool?: string;
+  label?: string;
+  status?: string;
+  step?: string;
+  summary?: string;
+  durationMs?: number;
+  stream?: string;
+};
+
 // --- channel helpers ---------------------------------------------------------
 
 export function isRunChannel(channel: Channel): boolean {

@@ -1,4 +1,5 @@
 import { query } from "@/db/client";
+import { fetchAutomatorOpenIssues, fetchAutomatorPullRequests, getAutomatorConfig } from "@/server/automator";
 import { fetchOpenIssues, fetchPullRequests } from "@/server/github";
 import { getSettings } from "@/server/settings";
 
@@ -92,6 +93,27 @@ function extractStatus(fieldValues: ItemSnapshot["fieldValues"]) {
   return NO_STATUS;
 }
 
+export async function withFallback<T>(primary: () => Promise<T>, fallback: () => Promise<T>, label: string): Promise<T> {
+  try { return await primary(); }
+  catch (error) { console.warn(`${label}; falling back to GitHub GraphQL`, error); return fallback(); }
+}
+
+async function fetchOpenIssuesWithFallback(repoList: { ownerLogin: string; repoName: string }[], githubToken: string) {
+  return withFallback(
+    async () => fetchAutomatorOpenIssues(await getAutomatorConfig(), repoList),
+    () => fetchOpenIssues(repoList, githubToken),
+    "automator github issues unavailable",
+  );
+}
+
+async function fetchPullRequestsWithFallback(repoList: { ownerLogin: string; repoName: string }[], githubToken: string) {
+  return withFallback(
+    async () => fetchAutomatorPullRequests(await getAutomatorConfig(), repoList),
+    () => fetchPullRequests(repoList, githubToken),
+    "automator github pulls unavailable",
+  );
+}
+
 export async function getProjectBoard(projectId: string) {
   const projectResult = await query<{
     id: string;
@@ -145,7 +167,7 @@ export async function getProjectBoard(projectId: string) {
   const repoList = repos.rows.map((repo) => ({ ownerLogin: repo.owner_login, repoName: repo.repo_name }));
   const settings = await getSettings();
   try {
-    const results = await fetchOpenIssues(repoList, settings.githubToken);
+    const results = await fetchOpenIssuesWithFallback(repoList, settings.githubToken);
     openIssues = results
       .flatMap((result) =>
         result.issues.map((issue) => ({
@@ -170,7 +192,7 @@ export async function getProjectBoard(projectId: string) {
   // issueKey ("owner/repo#number") -> PRs that declare they close it, built while mapping PRs.
   const prsByIssue = new Map<string, BoardLinkedPr[]>();
   try {
-    const results = await fetchPullRequests(repoList, settings.githubToken);
+    const results = await fetchPullRequestsWithFallback(repoList, settings.githubToken);
     const mapPullRequest = (repository: string, pr: { id: string; number: number; title: string; url: string; state: "OPEN" | "CLOSED" | "MERGED"; author?: { login: string } | null; assignees?: { nodes: { login: string }[] } | null; reviewRequests?: { nodes: { requestedReviewer?: { login?: string } | null }[] } | null; closingIssuesReferences?: { nodes: { number: number; repository: { nameWithOwner: string } }[] } | null; updatedAt: string }) => {
       for (const ref of pr.closingIssuesReferences?.nodes ?? []) {
         const key = `${ref.repository.nameWithOwner}#${ref.number}`;

@@ -1,0 +1,3 @@
+import { jsonError, ok } from "@/lib/json";
+import { automatorErrorInfo, decideRuleMaintenance, getAutomatorConfig } from "@/server/automator";
+export async function POST(request: Request, context: { params: Promise<{ id: string }> }) { try { const { id } = await context.params; const body = await request.json() as Record<string, unknown>; if (body.status !== "approved" && body.status !== "rejected") return jsonError("status must be approved or rejected", 400); return ok(await decideRuleMaintenance(await getAutomatorConfig(), id, body)); } catch (error) { const info = automatorErrorInfo(error); return jsonError(info.message, info.status); } }

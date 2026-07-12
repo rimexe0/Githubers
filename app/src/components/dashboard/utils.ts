@@ -19,7 +19,7 @@ export function relativeTime(iso: string) {
   return `${Math.floor(seconds / 86400)}d`;
 }
 
-export const staticTabs = ["chat", "agent-runs", "monitor", "summaries", "settings"];
+export const staticTabs = ["briefing", "chat", "agent-runs", "monitor", "summaries", "settings"];
 
 // Colour + grouping for an AgentAutomator run state, reused by the runs panel
 // and the board card badges. Mirrors the daemon state machine in API_CONTRACT.

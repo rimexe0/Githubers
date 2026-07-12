@@ -1,5 +1,6 @@
 import { query } from "@/db/client";
 import { fetchIssueBodies } from "@/server/github";
+import type { RepoIssueNode, RepoPullRequestNode } from "@/server/github";
 import { getSettings } from "@/server/settings";
 
 // --- Contract types (camelCase Run object, see AgentAutomator/API_CONTRACT.md) ---
@@ -31,6 +32,45 @@ export type AutomatorConfig = {
   token: string;
   repoPaths: Map<string, string>; // "owner/repo" -> local clone path
   triggers: Map<string, Autonomy>; // board column name -> autonomy
+};
+
+export type AutomatorProject = {
+  repoPath: string;
+  githubRepo: string;
+  prPolicy: "auto" | "approval";
+  maxParallel: number;
+  triggerColumns: Record<string, Autonomy>;
+  stackGate: "validated_approved" | "merged";
+};
+
+export type BriefingTask = {
+  id: string;
+  repo: string;
+  number: number;
+  kind: "issue" | "pull_request";
+  reason: string;
+  title: string;
+  url: string;
+  updatedAt: string;
+  state: string;
+  summary: string | null;
+  contextPack: Record<string, unknown> | null;
+  createdAt: string;
+  runId: string | null;
+  dispatchCount: number;
+};
+
+export type RemoteAction =
+  | { kind: "push"; repoPath: string; remote?: string; branch: string }
+  | { kind: "merge-pr" | "close-issue"; repo: string; number: number }
+  | { kind: "rerun-workflow"; repo: string; runId: number };
+
+export type ActionPreview = {
+  token: string;
+  action: RemoteAction;
+  command: string[];
+  outgoingCommits: { hash: string; author: string; committer: string; subject: string }[];
+  expiresAt: string;
 };
 
 // Parse the newline "key=value" settings text into a map. Keys keep their case
@@ -196,6 +236,205 @@ export type AutomatorModel = { id: string; free: boolean };
 export async function listModels(config: AutomatorConfig): Promise<AutomatorModel[]> {
   const data = await requestJson<{ models: AutomatorModel[] }>(config, "/models");
   return data.models ?? [];
+}
+
+// --- GitHub read-through adapter --------------------------------------------
+
+type RawObject = Record<string, unknown>;
+
+function asObject(value: unknown): RawObject | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as RawObject) : null;
+}
+
+function readString(value: RawObject | null, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const found = value?.[key];
+    if (typeof found === "string") return found;
+  }
+  return undefined;
+}
+
+function readNumber(value: RawObject | null, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const found = value?.[key];
+    if (typeof found === "number" && Number.isFinite(found)) return found;
+  }
+  return undefined;
+}
+
+function readArray(value: RawObject | null, keys: string[]): unknown[] {
+  for (const key of keys) {
+    const found = value?.[key];
+    if (Array.isArray(found)) return found;
+    const nodes = asObject(found)?.nodes;
+    if (Array.isArray(nodes)) return nodes;
+  }
+  return [];
+}
+
+function readLogin(value: RawObject | null): string | undefined {
+  return readString(asObject(value?.author) ?? asObject(value?.user), ["login"]);
+}
+
+async function readGithub(config: AutomatorConfig, requestBody: Record<string, unknown>): Promise<RawObject[]> {
+  const payload = await requestJson<{ items?: unknown[] }>(config, "/repos/read", {
+    method: "POST",
+    body: JSON.stringify({ kind: "github", request: requestBody }),
+  });
+  if (!payload || !Array.isArray(payload.items)) throw new AutomatorError("Invalid repository read response", "invalid_response", 502);
+  return payload.items.flatMap((item) => {
+    const object = asObject(item);
+    return object ? [object] : [];
+  });
+}
+
+function normalizeAutomatorIssue(repo: string, raw: RawObject): RepoIssueNode {
+  const number = readNumber(raw, ["number"]) ?? 0;
+  const author = readLogin(raw);
+  return {
+    id: readString(raw, ["id", "node_id"]) ?? `${repo}#${number}`,
+    number,
+    title: readString(raw, ["title"]) ?? `Issue #${number}`,
+    url: readString(raw, ["url", "html_url"]) ?? "",
+    updatedAt: readString(raw, ["updatedAt", "updated_at"]) ?? new Date(0).toISOString(),
+    author: author ? { login: author } : null,
+    assignees: { nodes: readArray(raw, ["assignees"]).map((item) => ({ login: readString(asObject(item), ["login"]) ?? "" })) },
+    labels: { nodes: readArray(raw, ["labels"]).map((item) => ({ name: readString(asObject(item), ["name"]) ?? "", color: readString(asObject(item), ["color"]) ?? "" })) },
+  };
+}
+
+function normalizeAutomatorPullRequest(repo: string, raw: RawObject): RepoPullRequestNode {
+  const number = readNumber(raw, ["number"]) ?? 0;
+  const state = (readString(raw, ["state"]) ?? "OPEN").toUpperCase();
+  const mergedAt = readString(raw, ["mergedAt", "merged_at"]);
+  const author = readLogin(raw);
+  const reviewRequests = readArray(raw, ["reviewRequests", "review_requests", "requested_reviewers"]).map((reviewer) => {
+    const object = asObject(reviewer) ?? {};
+    const requestedReviewer = asObject(object.requestedReviewer) ?? object;
+    return { requestedReviewer: { login: readString(requestedReviewer, ["login"]) } };
+  });
+  const closingIssuesReferences = readArray(raw, ["closingIssuesReferences", "closing_issues_references", "closingIssues"]).map((ref) => {
+    const object = asObject(ref) ?? {};
+    const repository = asObject(object.repository);
+    return {
+      number: readNumber(object, ["number"]) ?? 0,
+      repository: { nameWithOwner: readString(repository, ["nameWithOwner", "full_name"]) ?? readString(object, ["repository"]) ?? repo },
+    };
+  });
+
+  return {
+    id: readString(raw, ["id", "node_id"]) ?? `${repo}#${number}`,
+    number,
+    title: readString(raw, ["title"]) ?? `Pull request #${number}`,
+    url: readString(raw, ["url", "html_url"]) ?? "",
+    state: (state === "MERGED" || (state === "CLOSED" && mergedAt) ? "MERGED" : state === "CLOSED" ? "CLOSED" : "OPEN") as "OPEN" | "CLOSED" | "MERGED",
+    updatedAt: readString(raw, ["updatedAt", "updated_at"]) ?? new Date(0).toISOString(),
+    author: author ? { login: author } : null,
+    assignees: { nodes: readArray(raw, ["assignees"]).map((item) => ({ login: readString(asObject(item), ["login"]) ?? "" })) },
+    reviewRequests: { nodes: reviewRequests },
+    closingIssuesReferences: { nodes: closingIssuesReferences },
+  };
+}
+
+export async function fetchAutomatorOpenIssues(
+  config: AutomatorConfig,
+  repos: { ownerLogin: string; repoName: string }[],
+  limit = 30,
+) {
+  if (!repos.length) return [];
+  return Promise.all(
+    repos.map(async (repo) => {
+      const repository = `${repo.ownerLogin}/${repo.repoName}`;
+      const items = await readGithub(config, { operation: "issues", repo: repository, state: "open", limit });
+      return { repository, issues: items.filter((issue) => !issue.pull_request).map((issue) => normalizeAutomatorIssue(repository, issue)) };
+    }),
+  );
+}
+
+export async function fetchAutomatorPullRequests(
+  config: AutomatorConfig,
+  repos: { ownerLogin: string; repoName: string }[],
+  limit = 30,
+) {
+  if (!repos.length) return [];
+  return Promise.all(
+    repos.map(async (repo) => {
+      const repository = `${repo.ownerLogin}/${repo.repoName}`;
+      const [openPayload, closedPayload] = await Promise.all(
+        ["open", "closed"].map((state) => readGithub(config, { operation: "pullRequests", repo: repository, state, limit })),
+      );
+      return {
+        repository,
+        open: openPayload.map((pr) => normalizeAutomatorPullRequest(repository, pr)),
+        closed: closedPayload.map((pr) => normalizeAutomatorPullRequest(repository, pr)),
+      };
+    }),
+  );
+}
+
+// --- Completed daemon workflows ---------------------------------------------
+
+export async function listAutomatorProjects(config: AutomatorConfig): Promise<AutomatorProject[]> {
+  const rows = await requestJson<AutomatorProject[]>(config, "/projects");
+  return Array.isArray(rows) ? rows : [];
+}
+
+export async function saveAutomatorProject(config: AutomatorConfig, project: AutomatorProject): Promise<AutomatorProject> {
+  return requestJson(config, "/projects", { method: "POST", body: JSON.stringify(project) });
+}
+
+export async function listBriefingTasks(config: AutomatorConfig, state?: string): Promise<BriefingTask[]> {
+  const qs = state ? `?state=${encodeURIComponent(state)}` : "";
+  const rows = await requestJson<BriefingTask[]>(config, `/briefing/tasks${qs}`);
+  return Array.isArray(rows) ? rows : [];
+}
+
+export async function briefingSync(config: AutomatorConfig, repo: string) {
+  return requestJson<{ tasks: BriefingTask[]; cursor: string | null }>(config, "/briefing/sync", { method: "POST", body: JSON.stringify({ repo }) });
+}
+
+export async function briefingDispatchAll(config: AutomatorConfig) {
+  return requestJson<{ results: unknown[] }>(config, "/briefing/dispatch-all", { method: "POST" });
+}
+
+export async function briefingTaskAction(config: AutomatorConfig, id: string, action: "context" | "annotate" | "dispatch" | "state", body?: unknown) {
+  return requestJson(config, `/briefing/tasks/${encodeURIComponent(id)}/${action}`, { method: "POST", ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+}
+
+export async function previewRemoteAction(config: AutomatorConfig, action: RemoteAction): Promise<ActionPreview> {
+  return requestJson(config, "/actions/preview", { method: "POST", body: JSON.stringify({ action }) });
+}
+
+export async function executeRemoteAction(config: AutomatorConfig, token: string) {
+  return requestJson(config, "/actions/execute", { method: "POST", body: JSON.stringify({ token }) });
+}
+
+export async function reviewPullRequest(config: AutomatorConfig, input: { repo: string; number: number; repoPath?: string; profile?: string }) {
+  return requestJson<Record<string, unknown>>(config, "/pr-reviews", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function captureRule(config: AutomatorConfig, input: Record<string, unknown>) {
+  return requestJson(config, "/rules/capture", { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function getRepeatedRules(config: AutomatorConfig) {
+  return requestJson<unknown[]>(config, "/rules/repeated");
+}
+
+export async function consolidateRules(config: AutomatorConfig) {
+  return requestJson(config, "/rules/consolidate", { method: "POST" });
+}
+
+export async function getRuleMaintenance(config: AutomatorConfig) {
+  return requestJson<unknown[]>(config, "/rules/maintenance");
+}
+
+export async function decideRuleMaintenance(config: AutomatorConfig, id: string, input: Record<string, unknown>) {
+  return requestJson(config, `/rules/maintenance/${encodeURIComponent(id)}/decide`, { method: "POST", body: JSON.stringify(input) });
+}
+
+export async function rollbackRules(config: AutomatorConfig, ref: string) {
+  return requestJson(config, "/rules/rollback", { method: "POST", body: JSON.stringify({ ref }) });
 }
 
 // --- Chat-history migration + AGENTS.md doctor (AgentAutomator#6) -------------
@@ -477,7 +716,14 @@ export type TriggerResult = { triggered: number; skipped: number; errors: number
 export async function triggerRunsForBoard(projectId?: string): Promise<TriggerResult> {
   const result: TriggerResult = { triggered: 0, skipped: 0, errors: 0 };
   const config = await getAutomatorConfig();
-  if (!config.enabled || !config.token || config.triggers.size === 0 || config.repoPaths.size === 0) return result;
+  if (!config.enabled || !config.token) return result;
+  let projects: AutomatorProject[];
+  try {
+    projects = await listAutomatorProjects(config);
+  } catch {
+    return result;
+  }
+  const policyByRepo = new Map(projects.map((project) => [project.githubRepo, project]));
 
   const settings = await getSettings();
   if (!settings.githubToken) return result;
@@ -499,9 +745,10 @@ export async function triggerRunsForBoard(projectId?: string): Promise<TriggerRe
     if (content?.state && content.state !== "OPEN") continue; // don't act on closed issues
     const column = statusOf(raw.fieldValues);
     if (!column) continue;
-    const autonomy = config.triggers.get(column);
+    const policy = policyByRepo.get(repository);
+    const autonomy = policy?.triggerColumns[column];
     if (!autonomy) continue;
-    const repoPath = config.repoPaths.get(repository);
+    const repoPath = policy?.repoPath;
     if (!repoPath) {
       result.skipped += 1; // in a trigger column but no path mapping
       continue;

@@ -28,6 +28,21 @@ export type Settings = {
   automatorTriggers: string;
 };
 
+export type AutomatorProject = {
+  repoPath: string;
+  githubRepo: string;
+  prPolicy: "auto" | "approval";
+  maxParallel: number;
+  triggerColumns: Record<string, "supervised" | "full_auto">;
+  stackGate: "validated_approved" | "merged";
+};
+
+export type BriefingTask = {
+  id: string; repo: string; number: number; kind: "issue" | "pull_request"; reason: string;
+  title: string; url: string; updatedAt: string; state: string; summary: string | null;
+  contextPack: Record<string, unknown> | null; createdAt: string; runId: string | null; dispatchCount: number;
+};
+
 export type Project = {
   id: string;
   owner_type: "org" | "user";
@@ -254,6 +269,9 @@ export type AutomatorRun = {
   dependsOn: unknown[];
   failedCycleCount: number;
   activeStep?: string | null;
+  route?: string | null;
+  currentEpisode?: number;
+  episodeStatus?: string;
   prUrl: string | null;
   lastError: string | null;
   createdAt: string;

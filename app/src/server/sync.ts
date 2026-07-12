@@ -307,6 +307,8 @@ async function processProjectItem(project: SyncProject, item: ProjectV2ItemNode)
 async function processProject(project: SyncProject, githubToken: string, commentPollLimit: number) {
   const state = await fetchProjectState(project, githubToken, commentPollLimit);
   const itemResults = await Promise.all(state.items.map((item) => processProjectItem(project, item)));
+  const currentItemIds = state.items.map((item) => item.id);
+  await query("DELETE FROM project_items WHERE project_id = $1 AND NOT (github_item_id = ANY($2::text[]))", [project.id, currentItemIds]);
   await query("UPDATE github_projects SET title = $2, updated_at = now() WHERE id = $1", [project.id, state.title]);
   return itemResults.reduce((total, count) => total + count, 0);
 }

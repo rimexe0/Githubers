@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, FolderGit2, MessageSquarePlus, Plus, Trash2,
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useIsDesktop } from "@/hooks/use-is-desktop";
 import { Button } from "@/components/ui/button";
-import { ChatWindow, type Conversation, DEFAULT_MODEL, type Model } from "./ChatWindow";
+import { ChatWindow, type ChatSpawn, type Conversation, DEFAULT_MODEL, type Model } from "./ChatWindow";
 import {
   insertAsNewLane,
   insertInLane,
@@ -20,7 +20,9 @@ import { api, relativeTime, repoAccent } from "./utils";
 
 // A tab is one conversation (or a not-yet-created "new chat"). The repo lives on
 // the tab, so a group can freely mix repos — the active tab decides the context.
-type Tab = { id: string; repo: string; conversationId: string | null; model: string; profile?: string };
+// `seedPrompt` is set only on a spawned tab: its ChatWindow auto-sends it as the
+// first message, then clears it back to undefined so a reload can't resend.
+type Tab = { id: string; repo: string; conversationId: string | null; model: string; profile?: string; seedPrompt?: string };
 // A group is a tabbed pane: an ordered set of tabs with one active.
 type Group = { id: string; tabIds: string[]; activeId: string | null };
 type Dir = "center" | "left" | "right" | "top" | "bottom";
@@ -32,6 +34,8 @@ const LAYOUT_KEY = "chat-workspace-layout";
 const HEIGHTS_KEY = "chat-workspace-groupheights";
 const BASIS_KEY = "chat-workspace-lanebasis";
 const DEFAULT_BASIS = 380;
+// Mirror of the daemon's cap: never fan out more than 5 chats from one turn.
+const MAX_SPAWNS = 5;
 
 function loadStored<T>(key: string): T | null {
   if (typeof window === "undefined") return null;
@@ -218,6 +222,24 @@ export function RepoChat({ settings }: { settings: Settings }) {
   };
 
   const newChatTab = (repo: string) => addTabToActiveGroup({ id: nextId("t"), repo, conversationId: null, model: DEFAULT_MODEL });
+
+  // Open one seeded tab per spawn, inheriting the source tab's repo/model/profile.
+  // Each fresh tab creates its own conversation on the seed's first send, and all
+  // spawned tabs stay mounted so their streams run concurrently in the background.
+  const onSpawnChats = (sourceTabId: string, spawns: ChatSpawn[]) => {
+    const source = tabs[sourceTabId];
+    if (!source) return;
+    for (const spawn of spawns.slice(0, MAX_SPAWNS)) {
+      addTabToActiveGroup({
+        id: nextId("t"),
+        repo: source.repo,
+        conversationId: null,
+        model: source.model,
+        profile: source.profile,
+        seedPrompt: spawn.prompt,
+      });
+    }
+  };
 
   const selectTab = (groupId: string, tabId: string) => {
     setGroups((prev) => (prev[groupId] ? { ...prev, [groupId]: { ...prev[groupId], activeId: tabId } } : prev));
@@ -536,6 +558,8 @@ export function RepoChat({ settings }: { settings: Settings }) {
                                 void loadConversations();
                               }}
                               onActivity={loadConversations}
+                              onSpawnChats={onSpawnChats}
+                              onSeedConsumed={(tabId) => patchTab(tabId, { seedPrompt: undefined })}
                             />
                           </div>
                           {!dragging && !isLast && isDesktop && <ResizeHandle axis="y" onResize={(value) => setGroupSize(groupId, value)} />}
@@ -576,6 +600,8 @@ function GroupPane({
   onProfileChange,
   onConversationCreated,
   onActivity,
+  onSpawnChats,
+  onSeedConsumed,
 }: {
   group: Group;
   tabs: Record<string, Tab>;
@@ -594,6 +620,8 @@ function GroupPane({
   onProfileChange: (tabId: string, profile: string) => void;
   onConversationCreated: (tabId: string, id: string) => void;
   onActivity: () => void;
+  onSpawnChats: (tabId: string, spawns: ChatSpawn[]) => void;
+  onSeedConsumed: (tabId: string) => void;
 }) {
   const titleOf = (tab: Tab) => (tab.conversationId ? conversations.find((c) => c.id === tab.conversationId)?.title || "Untitled chat" : "New chat");
   return (
@@ -654,6 +682,9 @@ function GroupPane({
                 onProfileChange={(profile) => onProfileChange(tabId, profile)}
                 onConversationCreated={(id) => onConversationCreated(tabId, id)}
                 onActivity={onActivity}
+                onSpawnChats={(spawns) => onSpawnChats(tabId, spawns)}
+                seedPrompt={tab.seedPrompt}
+                onSeedConsumed={() => onSeedConsumed(tabId)}
               />
             </div>
           );

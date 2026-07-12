@@ -1,6 +1,6 @@
 "use client";
 
-import { Brain, ChevronRight, CornerDownLeft, FileSearch, Loader2, Lock } from "lucide-react";
+import { Brain, ChevronRight, CornerDownLeft, FileSearch, GitBranchPlus, Loader2, Lock, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -11,15 +11,25 @@ export type ThinkingEvent =
   | { kind: "reasoning"; text: string }
   | { kind: "tool"; tool: string; label: string; status: string };
 export type ChatMessage = { role: "user" | "assistant"; content: string; thinking?: ThinkingEvent[]; streaming?: boolean; failed?: boolean };
+// A self-contained follow-up chat the agent proposed spinning off. The daemon
+// bakes all findings into `prompt`, so a fresh chat needs only that as its seed.
+export type ChatSpawn = { title: string; prompt: string };
 export type Model = { id: string; free: boolean };
 export type Conversation = { id: string; repo: string; model: string | null; profile: string | null; title: string | null; updated_at: string; message_count: number };
 
 export const DEFAULT_MODEL = ""; // empty = daemon's plan-profile default
 // The read-only default backend; empty profile resolves to this on the daemon.
 export const PLAN_PROFILE = "opencode-plan";
-// If no stream event arrives for this long, assume the model is stuck (free
-// models can silently retry a rate limit with no output at all) and abort.
-const INACTIVITY_TIMEOUT_MS = 70_000;
+// Two-phase watchdog. A throttled/queued free model streams *nothing* and just
+// hangs, so we cut it after a short wait. But a model that has already streamed
+// (reasoning/tool events) is alive — only slow — so once we've seen any bytes we
+// switch to a far more patient gap, so a Gemma-style "thinks hard, answers late"
+// run isn't killed the moment it goes quiet to compose its final answer.
+const FIRST_BYTE_TIMEOUT_MS = 60_000;
+const STALL_TIMEOUT_MS = 240_000;
+// The daemon caps spawns at 5; clamp again here so a misbehaving stream can't
+// fan out an unbounded number of concurrent chats (each burns model quota).
+const MAX_SPAWNS = 5;
 
 // "anthropic/claude-3.5" -> "anthropic"; ids with no slash fall in "other".
 function providerOf(id: string): string {
@@ -62,6 +72,9 @@ export function ChatWindow({
   onProfileChange,
   onConversationCreated,
   onActivity,
+  onSpawnChats,
+  seedPrompt,
+  onSeedConsumed,
 }: {
   repo: string;
   conversationId: string | null;
@@ -73,17 +86,28 @@ export function ChatWindow({
   onProfileChange: (profile: string) => void;
   onConversationCreated: (id: string) => void;
   onActivity: () => void;
+  // Fires when the user confirms the spawn card — the parent opens one new chat
+  // per entry, seeded with its prompt.
+  onSpawnChats: (spawns: ChatSpawn[]) => void;
+  // Set when this window was itself spawned: its first message is sent
+  // automatically from `seedPrompt`, then `onSeedConsumed` clears it upstream.
+  seedPrompt?: string;
+  onSeedConsumed?: () => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Spawn requests from the latest completed turn, awaiting user confirmation.
+  const [pendingSpawns, setPendingSpawns] = useState<ChatSpawn[]>([]);
   const threadRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Live id: null until we've loaded (or created, on first send) a conversation.
   // Kept in a ref so `send` sees the latest value and so the load effect can
   // tell "the prop changed" from "we just created this id ourselves".
   const convRef = useRef<string | null>(null);
+  // Guards the one-shot seed send against strict-mode double-invoke / re-renders.
+  const seedFiredRef = useRef(false);
 
   useEffect(() => {
     // Skip when the prop matches what we're already showing — notably right
@@ -124,17 +148,39 @@ export function ChatWindow({
     });
   };
 
-  const cancelSend = () => abortRef.current?.abort();
+  // Set right before aborting so the stream/catch paths can distinguish a
+  // deliberate Stop from a timeout or a genuine failure.
+  const stoppedRef = useRef(false);
+  const cancelSend = () => {
+    stoppedRef.current = true;
+    abortRef.current?.abort();
+  };
 
-  const send = useCallback(async () => {
-    const text = input.trim();
+  const send = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if (!text || !repo || sending) return;
+    stoppedRef.current = false;
     setError(null);
     setSending(true);
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: text }]);
 
     let placeholderAdded = false;
+    // One controller for the whole turn (create → fetch → stream) so both the
+    // Stop button and the inactivity guard can abort at any stage — including a
+    // daemon that accepts the request but then never streams a byte (a rate-
+    // limited free model), which used to hang forever on a silent spinner.
+    const controller = new AbortController();
+    abortRef.current = controller;
+    // Flips true on the first streamed byte; the watchdog then grants the longer
+    // stall window (see FIRST_BYTE_TIMEOUT_MS / STALL_TIMEOUT_MS).
+    let streamedSomething = false;
+    let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+    const armWatchdog = () => {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => controller.abort(), streamedSomething ? STALL_TIMEOUT_MS : FIRST_BYTE_TIMEOUT_MS);
+    };
+    armWatchdog();
     try {
       let liveConversationId = convRef.current;
       if (!liveConversationId) {
@@ -147,8 +193,7 @@ export function ChatWindow({
         onConversationCreated(created.id);
       }
 
-      const controller = new AbortController();
-      abortRef.current = controller;
+      armWatchdog();
       const response = await fetch(`/api/chat/${liveConversationId}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -167,27 +212,22 @@ export function ChatWindow({
       let buffer = "";
       let liveText = "";
       let streamFailed = false;
+      let capturedSpawns: ChatSpawn[] = [];
       const liveThinking: ThinkingEvent[] = [];
-
-      let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
-      const resetInactivityTimer = () => {
-        if (inactivityTimer) clearTimeout(inactivityTimer);
-        inactivityTimer = setTimeout(() => controller.abort(), INACTIVITY_TIMEOUT_MS);
-      };
-      resetInactivityTimer();
 
       try {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          resetInactivityTimer();
+          if (value && value.length) streamedSomething = true;
+          armWatchdog();
           buffer += decoder.decode(value, { stream: true });
           let index: number;
           while ((index = buffer.indexOf("\n")) >= 0) {
             const line = buffer.slice(0, index).trim();
             buffer = buffer.slice(index + 1);
             if (!line) continue;
-            let event: { type?: string; text?: string; tool?: string; label?: string; status?: string; reply?: string; thinking?: ThinkingEvent[]; message?: string };
+            let event: { type?: string; text?: string; tool?: string; label?: string; status?: string; reply?: string; thinking?: ThinkingEvent[]; message?: string; spawns?: ChatSpawn[] };
             try {
               event = JSON.parse(line);
             } catch {
@@ -202,6 +242,8 @@ export function ChatWindow({
                 liveThinking.length = 0;
                 liveThinking.push(...event.thinking);
               }
+              // Always present ([] = no-op); clamp defensively.
+              if (Array.isArray(event.spawns)) capturedSpawns = event.spawns.slice(0, MAX_SPAWNS);
             } else if (event.type === "error") {
               streamFailed = true;
               setError(event.message ?? "Agent error");
@@ -210,29 +252,58 @@ export function ChatWindow({
           }
         }
       } catch (streamError) {
-        streamFailed = true;
-        const timedOut = controller.signal.aborted;
-        setError(
-          timedOut
-            ? "No response for a while — the model may be rate-limited or stuck. Try again or pick another model."
-            : streamError instanceof Error
-              ? streamError.message
-              : "Chat stream failed",
-        );
+        // A deliberate Stop keeps whatever streamed so far; a timeout or real
+        // error marks the message failed and explains why.
+        if (!stoppedRef.current) {
+          streamFailed = true;
+          setError(
+            controller.signal.aborted
+              ? "The model went quiet for too long and was stopped — its partial reply is above. Try again or pick another model."
+              : streamError instanceof Error
+                ? streamError.message
+                : "Chat stream failed",
+          );
+        }
       } finally {
         if (inactivityTimer) clearTimeout(inactivityTimer);
       }
 
-      patchLastAssistant(liveText || "(no response)", liveThinking, false, streamFailed);
+      patchLastAssistant(liveText || (stoppedRef.current ? "(stopped)" : "(no response)"), liveThinking, false, streamFailed);
       onActivity();
+      // A non-empty `spawns` only ever arrives inside a completed `done`, so the
+      // turn finished — show the card even if a non-fatal error also fired (free
+      // models routinely emit a 429 warning yet still deliver the full reply).
+      if (capturedSpawns.length) setPendingSpawns(capturedSpawns);
     } catch (sendError) {
-      setError(sendError instanceof Error ? sendError.message : "Chat failed");
-      if (placeholderAdded) patchLastAssistant("", [], false, true);
+      // Aborted before the stream ever began (a stuck create/fetch), or a real error.
+      if (stoppedRef.current) {
+        if (placeholderAdded) patchLastAssistant("(stopped)", [], false, false);
+      } else {
+        setError(
+          controller.signal.aborted
+            ? "The model never started responding — it's probably rate-limited or queued. Try again or pick another model."
+            : sendError instanceof Error
+              ? sendError.message
+              : "Chat failed",
+        );
+        if (placeholderAdded) patchLastAssistant("", [], false, true);
+      }
     } finally {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
       abortRef.current = null;
       setSending(false);
     }
   }, [input, repo, sending, model, profile, onConversationCreated, onActivity]);
+
+  // A spawned window auto-sends its seed as the first message, exactly once. The
+  // ref survives the onSeedConsumed()-triggered re-render (seedPrompt clears
+  // upstream) so it can't fire again on remount/reload.
+  useEffect(() => {
+    if (!seedPrompt || seedFiredRef.current || sending || messages.length > 0) return;
+    seedFiredRef.current = true;
+    void send(seedPrompt);
+    onSeedConsumed?.();
+  }, [seedPrompt, sending, messages.length, send, onSeedConsumed]);
 
   const providerGroups = groupByProvider(models);
   // OpenCode backends are read-only and use the model picker; claude/codex are
@@ -329,6 +400,38 @@ export function ChatWindow({
 
       {error && <div className="shrink-0 rounded-md bg-destructive/10 px-2 py-1 text-[0.7rem] text-destructive">{error}</div>}
 
+      {pendingSpawns.length > 0 && (
+        <div className="shrink-0 rounded-md border border-[var(--ctp-blue)]/40 bg-[var(--ctp-blue)]/10 p-2">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[0.7rem] font-medium text-foreground">
+            <GitBranchPlus className="size-3 shrink-0 text-[var(--ctp-blue)]" />
+            Spin off {pendingSpawns.length} new chat{pendingSpawns.length === 1 ? "" : "s"}?
+          </div>
+          <ul className="mb-2 flex flex-col gap-0.5">
+            {pendingSpawns.map((spawn, index) => (
+              <li key={index} className="flex items-center gap-1.5 text-[0.65rem] text-muted-foreground">
+                <span className="size-1 shrink-0 rounded-full bg-[var(--ctp-blue)]" />
+                <span className="truncate">{spawn.title}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="flex items-center gap-1.5">
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                onSpawnChats(pendingSpawns);
+                setPendingSpawns([]);
+              }}
+            >
+              <GitBranchPlus className="size-3.5" /> Spawn all
+            </Button>
+            <Button type="button" size="sm" variant="secondary" onClick={() => setPendingSpawns([])}>
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="flex shrink-0 items-end gap-1.5">
         <Textarea
           value={input}
@@ -344,11 +447,11 @@ export function ChatWindow({
           disabled={!repo || sending}
         />
         {sending ? (
-          <Button type="button" size="sm" variant="secondary" onClick={cancelSend}>
-            <Loader2 className="size-3.5 animate-spin" />
+          <Button type="button" size="sm" variant="destructive" onClick={cancelSend} title="Stop the agent">
+            <Square className="size-3.5 fill-current" /> Stop
           </Button>
         ) : (
-          <Button type="button" size="sm" onClick={send} disabled={!repo || !input.trim()}>
+          <Button type="button" size="sm" onClick={() => send()} disabled={!repo || !input.trim()}>
             <CornerDownLeft className="size-3.5" />
           </Button>
         )}

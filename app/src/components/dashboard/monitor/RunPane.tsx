@@ -83,12 +83,13 @@ export function RunPane({
               <p className="mb-1 line-clamp-2 text-[0.6rem] text-destructive">{run.error}</p>
             ) : null}
             {run.lastLines.length === 0 ? (
-              <p className="text-[0.6rem] text-muted-foreground">No output yet.</p>
+              run.events.length === 0 ? <p className="text-[0.6rem] text-muted-foreground">No output yet.</p> : <div className="space-y-1">{run.events.slice(-6).map((event) => <div key={`${event.at}-${event.kind}-${event.text}`} className="text-[0.6rem]"><span className="font-semibold text-[var(--ctp-blue)]">{event.kind}</span> {event.text}</div>)}</div>
             ) : (
               <pre className="whitespace-pre-wrap break-words font-mono text-[0.6rem] leading-tight text-[var(--ctp-subtext0)]">
                 {run.lastLines.join("\n")}
               </pre>
             )}
+            {(run.route || run.episodeStatus) && <div className="mt-1 text-[0.55rem] text-muted-foreground">{run.route ? `route ${run.route}` : ""}{run.episodeStatus ? ` · episode ${run.currentEpisode ?? "?"} ${run.episodeStatus}` : ""}</div>}
           </div>
         )}
       </div>

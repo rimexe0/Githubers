@@ -5,6 +5,7 @@ import { Menu, X } from "lucide-react";
 import { useEffect, useReducer, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { AgentRuns } from "./dashboard/AgentRuns";
+import { Briefing } from "./dashboard/Briefing";
 import { Monitor } from "./dashboard/monitor/Monitor";
 import { ProjectBoard } from "./dashboard/ProjectBoard";
 import { RepoChat } from "./dashboard/RepoChat";
@@ -156,6 +157,7 @@ export function Dashboard() {
   };
 
   const staticTabLabels: Record<string, string> = {
+    briefing: "Briefing",
     chat: "Chat",
     "agent-runs": "Agent runs",
     monitor: "Monitor",
@@ -269,6 +271,7 @@ export function Dashboard() {
             </button>
             <div className="mx-2 h-4 w-px bg-border" />
             <Tabs.Trigger value="chat" className="tab-trigger">Chat</Tabs.Trigger>
+            <Tabs.Trigger value="briefing" className="tab-trigger">Briefing</Tabs.Trigger>
             <Tabs.Trigger value="agent-runs" className="tab-trigger">Agent runs</Tabs.Trigger>
             <Tabs.Trigger value="monitor" className="tab-trigger">Monitor</Tabs.Trigger>
             <Tabs.Trigger value="summaries" className="tab-trigger">Summaries</Tabs.Trigger>
@@ -288,6 +291,9 @@ export function Dashboard() {
           ))}
           <Tabs.Content value="chat" className="panel min-h-0 flex-1 overflow-hidden p-3">
             <RepoChat settings={settings} />
+          </Tabs.Content>
+          <Tabs.Content value="briefing" className="panel min-h-0 flex-1 overflow-hidden p-3">
+            <Briefing settings={settings} projects={projects} />
           </Tabs.Content>
           <Tabs.Content value="agent-runs" className="panel min-h-0 flex-1 overflow-hidden p-3">
             <AgentRuns settings={settings} />

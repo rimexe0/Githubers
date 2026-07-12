@@ -10,6 +10,8 @@ AI Slop Self-hosted GitHub Projects v2 change watcher for LAN/Tailscale deployme
 - Docker Compose.
 - GitHub GraphQL polling.
 - Optional GitHub webhook ingestion with signature validation.
+- AgentAutomator-backed repository reads with automatic GitHub GraphQL fallback.
+- AgentAutomator project policy, daily briefing, PR review, rules lifecycle, and preview-gated remote actions.
 - LM Studio OpenAI-compatible summaries, with Codex/OpenCode command fallbacks.
 - SMTP email and Telegram notification settings.
 
@@ -123,6 +125,7 @@ Current verification commands:
 ```bash
 cd app
 npm run typecheck
+npm test
 npm run build
 npx -y react-doctor@latest . --verbose
 ```
@@ -133,7 +136,7 @@ From the repo root:
 docker compose config
 ```
 
-End-to-end smoke test, with Githubers and AgentAutomator already running:
+End-to-end smoke test, with Githubers and AgentAutomator already running. The default path does not require a local model or GPU:
 
 ```bash
 node tests/smoke.mjs --with-model

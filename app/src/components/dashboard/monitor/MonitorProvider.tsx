@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalS
 import type { AutomatorRun } from "../types";
 import { api } from "../utils";
 import { MonitorClient } from "./client";
-import type { PermissionPayload, StatusPayload } from "./envelope";
+import type { EventPayload, PermissionPayload, StatusPayload } from "./envelope";
 import { MonitorStore, runChannel, type MonitorSnapshot } from "./store";
 
 const ROSTER_POLL_MS = 2500;
@@ -35,6 +35,7 @@ export function MonitorProvider({ wsUrl, token = "", children }: { wsUrl: string
     const offEvent = client.onEvent((env) => {
       if (env.type === "status") store.applyStatus(env.channel, (env.payload ?? {}) as StatusPayload);
       else if (env.type === "permission-request") store.enqueuePermission(env.channel, (env.payload ?? {}) as PermissionPayload);
+      else if (env.type === "event") store.applyEvent(env.channel, (env.payload ?? {}) as EventPayload);
     });
 
     client.connect();
